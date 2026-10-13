@@ -67,15 +67,26 @@ export class Player extends EventTarget {
     if (this.playing) this.restart();
   }
 
+  /** Cambia el motor de voz (sistema o neural) conservando la posición. */
+  setEngine(engine) {
+    if (engine === this.engine) return;
+    const wasPlaying = this.playing;
+    if (wasPlaying) this.stop();
+    this.engine = engine;
+    this.engine.setRate && this.engine.setRate(this.settings.rate || 1);
+    if (wasPlaying) this.play();
+  }
+
   setRate(rate) {
     this.settings.rate = rate;
-    if (this.playing) this.restart();
+    if (this.engine.liveRate) this.engine.setRate(rate);
+    else if (this.playing) this.restart();
     this.emit('progress', this.progressInfo());
   }
 
   setPitch(pitch) {
     this.settings.pitch = pitch;
-    if (this.playing) this.restart();
+    if (this.playing && !this.engine.isNeural) this.restart();
   }
 
   get lang() {
@@ -148,6 +159,8 @@ export class Player extends EventTarget {
     this.playing = true;
     this.errors = 0;
     this.stopAfterSentence = false;
+    if (this.engine.unlock) this.engine.unlock(); // dentro del toque del usuario (iOS)
+    if (this.engine.setRate) this.engine.setRate(this.settings.rate || 1);
     this.emit('state', { playing: true });
     this.startUnit(this.idx, 0, this.engine.cancel());
   }
@@ -232,7 +245,11 @@ export class Player extends EventTarget {
     const isLast = chunkIdx === info.chunks.length - 1;
     let queuedNext = false;
     const st = this.settings;
-    this.engine.speak(ch.text, {
+    const engine = this.engine;
+    // Los motores neuronales insertan la pausa como silencio dentro del audio
+    const pauseAfter = engine.handlesPauses ? this.unitPause(i, isLast) : 0;
+    engine.speak(ch.text, {
+      pauseAfter,
       voice: this.voice,
       lang: this.voice ? undefined : this.lang,
       rate: st.rate || 1,
@@ -250,10 +267,11 @@ export class Player extends EventTarget {
         if (st.wordHighlight === 'estimate') this.startEstimate(i, info, ch);
         // Encolar el siguiente fragmento por adelantado si no hay pausa entre medio
         const next = this.nextUnit(i, chunkIdx);
-        if (next && this.unitPause(i, isLast) === 0 && !this.mustStopAt(i, isLast)) {
+        if (next && (engine.handlesPauses || this.unitPause(i, isLast) === 0) && !this.mustStopAt(i, isLast)) {
           queuedNext = true;
           this.startUnit(next.i, next.c, gen);
         }
+        if (engine.prefetch) engine.prefetch(this.upcomingTexts(i, chunkIdx, 4));
       },
       onboundary: (charIndex) => {
         if (st.wordHighlight === 'off') return;
@@ -262,7 +280,7 @@ export class Player extends EventTarget {
       },
       onend: () => {
         this.stopEstimate();
-        const elapsed = (performance.now() - this.unitStart) / 1000;
+        const elapsed = (performance.now() - this.unitStart) / 1000 - pauseAfter / 1000 / (st.rate || 1);
         if (elapsed > 0.8 && ch.text.length > 25) {
           const cps1 = ch.text.length / elapsed / (st.rate || 1);
           if (cps1 > 4 && cps1 < 40) this.cps = this.cps * 0.8 + cps1 * 0.2;
@@ -278,7 +296,7 @@ export class Player extends EventTarget {
         if (queuedNext) return;
         const next = this.nextUnit(i, chunkIdx);
         if (!next) return this.finish();
-        const wait = this.unitPause(i, isLast);
+        const wait = engine.handlesPauses ? 0 : this.unitPause(i, isLast);
         clearTimeout(this.timer);
         if (wait > 0) this.timer = setTimeout(() => this.startUnit(next.i, next.c, gen), wait);
         else this.startUnit(next.i, next.c, gen);
@@ -296,6 +314,19 @@ export class Player extends EventTarget {
         if (next) this.timer = setTimeout(() => this.startUnit(next.i, next.c, gen), 300);
       }
     }, gen);
+  }
+
+  /** Textos de los próximos fragmentos (para sintetizar por adelantado). */
+  upcomingTexts(i, c, n) {
+    const out = [];
+    let u = { i, c };
+    for (let k = 0; k < n; k++) {
+      u = this.nextUnit(u.i, u.c);
+      if (!u) break;
+      const ch = this.chunks(u.i).chunks[u.c];
+      if (ch) out.push(ch.text);
+    }
+    return out;
   }
 
   nextUnit(i, c) {

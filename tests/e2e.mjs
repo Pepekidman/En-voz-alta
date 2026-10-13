@@ -14,7 +14,7 @@ fs.mkdirSync(OUT, { recursive: true });
 const pw = await import(process.env.PLAYWRIGHT_PATH ? pathToFileURL(process.env.PLAYWRIGHT_PATH).href : 'playwright');
 const { chromium } = pw.default || pw;
 
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png', '.wasm': 'application/wasm' };
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   let p = path.join(ROOT, decodeURIComponent(u.pathname));
@@ -125,7 +125,7 @@ check(await page.isVisible('#lib-empty'), 'muestra estado vacío');
 await page.screenshot({ path: path.join(OUT, '01-biblioteca-vacia.png') });
 
 console.log('Importación de todos los formatos');
-const files = fs.readdirSync(FIX).filter((f) => !f.startsWith('.')).map((f) => path.join(FIX, f));
+const files = fs.readdirSync(FIX).filter((f) => !f.startsWith('.') && fs.statSync(path.join(FIX, f)).isFile()).map((f) => path.join(FIX, f));
 await page.setInputFiles('#file-input', files);
 await page.waitForFunction((n) => document.querySelectorAll('#lib-list .card').length === n, files.length, { timeout: 30000 })
   .catch(async () => console.log('    errores:', errors, 'tarjetas:', await page.$$eval('.card-title', (e) => e.map((x) => x.textContent)), 'busy:', await page.textContent('#busy-text')));
@@ -322,7 +322,71 @@ await page.waitForFunction((n) => document.querySelectorAll('#lib-list .card').l
 check(true, 'documento eliminado');
 await page.screenshot({ path: path.join(OUT, '07-biblioteca-final.png') });
 
+console.log('Voces neuronales (modelo de prueba)');
+await openCard('.card:has(.badge:text-is("epub"))');
+await page.click('#btn-voice');
+await page.waitForSelector('.sheet .nv-row');
+const nvRows = await page.$$eval('.sheet .nv-row .t', (els) => els.map((e) => e.textContent));
+check(nvRows.length === 5 && nvRows.some((t) => /Claude/.test(t)), `catálogo de voces en español (${nvRows.length})`);
+await page.screenshot({ path: path.join(OUT, '08-voces-neuronales.png') });
+const NV = path.join(ROOT, 'tests', 'fixtures', 'neural');
+await page.setInputFiles('#voice-input', [path.join(NV, 'test-voice.onnx'), path.join(NV, 'test-voice.onnx.json')]);
+await page.waitForFunction(() => document.querySelector('#voice-label').textContent.startsWith('✦'), null, { timeout: 30000 });
+check(true, 'voz importada desde archivos y activada');
+check(await page.evaluate(async () => (await import('/js/neural/voices.js')).isRuntimeReady()), 'motor neural guardado para uso sin conexión');
+await page.click('#sheet-close').catch(() => {});
+await page.evaluate(() => { window.__evz.player.seek(0); });
+await page.click('#btn-speed');
+await page.click('.sheet .seg button:text-is("3×")');
+await page.click('#sheet-close');
+await page.click('#btn-play');
+await page.waitForFunction(() => window.__evz.player.idx >= 3, null, { timeout: 30000 }).catch(() => {});
+const nstate = await page.evaluate(() => ({ idx: window.__evz.player.idx, synth: window.__evz.neural.stats.synthMs, audio: window.__evz.neural.stats.audioMs, rate: window.__evz.neural.audio.playbackRate, paused: window.__evz.neural.audio.paused }));
+check(nstate.idx >= 3 && nstate.synth > 0 && nstate.audio > 0, `lee con la voz neural (frase ${nstate.idx}, ${Math.round(nstate.audio)} ms de audio)`);
+check(nstate.rate === 3 && !nstate.paused, 'velocidad aplicada al audio neural (3×)');
+check(await page.$('#reader-content .s.current mark') !== null, 'resaltado de palabra con voz neural');
+await page.screenshot({ path: path.join(OUT, '09-leyendo-neural.png') });
+await page.evaluate(() => window.__evz.neural.audio.pause()); // como una llamada entrante
+await page.waitForTimeout(600);
+check(await page.evaluate(() => !window.__evz.player.playing), 'una pausa externa (llamada, auriculares) pausa la lectura');
+await page.click('#btn-play');
+await page.waitForFunction(() => !window.__evz.neural.audio.paused, null, { timeout: 5000 }).catch(() => {});
+await page.click('#btn-play');
+await page.waitForTimeout(700);
+check(await page.evaluate(() => window.__evz.neural.audio.paused && !window.__evz.player.playing), 'pausa la voz neural');
+// Si el motor se cierra (p. ej. por memoria), se recupera solo
+await page.evaluate(() => { window.__evz.neural.resetWorker(new Error('prueba')); window.__evz.neural.cache.clear(); window.__evz.neural.stats.audioMs = 0; });
+await page.click('#btn-play');
+await page.waitForFunction(() => window.__evz.neural.stats.audioMs > 0, null, { timeout: 20000 }).catch(() => {});
+check(await page.evaluate(() => window.__evz.neural.stats.audioMs > 0 && window.__evz.player.playing), 'se recupera si el motor de voz se cierra');
+await page.click('#btn-play');
+const dlState = await page.evaluate(async () => {
+  const V = await import('/js/neural/voices.js');
+  const fx = location.origin + '/tests/fixtures/neural/';
+  const v = { key: 'descarga-prueba', name: 'x', modelUrl: fx + 'test-voice.onnx', configUrl: fx + 'test-voice.onnx.json', size: 856 };
+  const seen = [];
+  await V.downloadVoice(v, { onProgress: (f) => seen.push(f) });
+  const ok = await V.isVoiceDownloaded(v);
+  await V.deleteVoice(v);
+  return { ok, last: seen[seen.length - 1], gone: !(await V.isVoiceDownloaded(v)) };
+});
+check(dlState.ok && dlState.last === 1 && dlState.gone, 'descarga con progreso y eliminación de voces');
+
+console.log('Exportar a MP3');
+await page.click('#btn-voice');
+await page.waitForSelector('.sheet .btn:has-text("Capítulo actual")');
+const [mp3] = await Promise.all([
+  page.waitForEvent('download', { timeout: 60000 }),
+  page.click('.sheet .btn:has-text("Capítulo actual")')
+]);
+const mp3Buf = fs.readFileSync(await mp3.path());
+const mp3Ok = mp3Buf.length > 1000 && mp3Buf[0] === 0xff && (mp3Buf[1] & 0xe0) === 0xe0;
+check(mp3Ok, `MP3 exportado (${mp3Buf.length} bytes)`);
+check(mp3.suggestedFilename() === 'Libro de Prueba - Capitulo I.mp3', `nombre del archivo: ${mp3.suggestedFilename()}`);
+await page.waitForSelector('#busy', { state: 'hidden' });
+
 console.log('Funcionamiento sin conexión');
+await page.click('#btn-back');
 await page.evaluate(() => navigator.serviceWorker.ready);
 await page.reload();
 await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 10000 }).catch(() => {});
@@ -332,6 +396,15 @@ await page.waitForSelector('#lib-list .card', { timeout: 10000 }).catch(() => {}
 check((await page.$$('#lib-list .card')).length === files.length, 'la app carga sin conexión');
 await openCard('.card:has(.badge:text-is("pdf"))');
 check(await page.$('#reader-content .s') !== null, 'abre un documento sin conexión');
+await page.click('#btn-back');
+await openCard('.card:has(.badge:text-is("epub"))');
+check((await page.textContent('#voice-label')).startsWith('✦'), 'voz neural disponible sin conexión');
+await page.evaluate(() => { window.__evz.neural.stats.audioMs = 0; });
+await page.click('#btn-play');
+await page.waitForFunction(() => window.__evz.neural.stats.audioMs > 0, null, { timeout: 20000 }).catch(() => {});
+check(await page.evaluate(() => window.__evz.neural.stats.audioMs > 0), 'la voz neural sintetiza sin conexión');
+check(await page.evaluate(() => crossOriginIsolated), 'aislamiento entre orígenes activo (motor multihilo)');
+await page.click('#btn-play');
 await context.setOffline(false);
 
 const relevantErrors = errors.filter((e) => !/favicon/.test(e));

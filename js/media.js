@@ -70,6 +70,9 @@ export class MediaControls {
       const a = this.ensureAudio();
       this.selfPaused = false;
       a.play().catch(() => {});
+    } else if (this.audio && !this.audio.paused) {
+      this.selfPaused = true;
+      this.audio.pause();
     }
     if (this.ms) this.ms.playbackState = 'playing';
     if (this.wantWake) this.requestWake();

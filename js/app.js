@@ -5,14 +5,22 @@ import { SpeechEngine, IS_ANDROID, IS_IOS } from './speech.js';
 import { Player } from './player.js';
 import { MediaControls } from './media.js';
 import { escapeHtml, toSpeech, compileDictionary } from './text.js';
+import { NeuralEngine } from './neural/engine.js';
+import {
+  allVoices, findVoice, isRuntimeReady, isVoiceDownloaded, downloadedKeys, downloadVoice, downloadRuntime,
+  deleteVoice, importVoiceFiles, fmtSize, RUNTIME_SIZE
+} from './neural/voices.js';
+import { exportMp3 } from './neural/export.js';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 
 const DEFAULTS = {
   rate: 1,
   pitch: 1,
   volume: 1,
   voices: {}, // idioma → voiceURI
+  neuralVoices: {}, // idioma → voz neural elegida
+  neuralSpeakers: {}, // voz neural → hablante
   paraPause: 450,
   headingPause: 850,
   sentencePause: 0,
@@ -63,6 +71,7 @@ let deferredInstall = null;
 let swWaiting = null;
 
 const engine = new SpeechEngine();
+const neural = new NeuralEngine();
 const player = new Player(engine);
 const media = new MediaControls({
   play: () => player.play(),
@@ -132,17 +141,29 @@ function toast(msg, { action, onAction, duration = 3500 } = {}) {
   toastTimer = setTimeout(() => el.classList.add('hidden'), duration);
 }
 
-function busy(text, progress) {
+function busy(text, progress, { onCancel } = {}) {
   const el = $('#busy');
-  if (text === false) { el.classList.add('hidden'); return; }
+  const cancel = $('#busy-cancel');
+  if (text === false) { el.classList.add('hidden'); cancel.classList.add('hidden'); cancel.onclick = null; return; }
   el.classList.remove('hidden');
   if (text) $('#busy-text').textContent = text;
   const pr = $('#busy-progress');
   if (typeof progress === 'number') { pr.classList.remove('hidden'); pr.value = progress; }
   else pr.classList.add('hidden');
+  cancel.classList.toggle('hidden', !onCancel);
+  cancel.onclick = onCancel ? () => { cancel.textContent = 'Cancelando…'; onCancel(); } : null;
+  if (onCancel && !cancel.dataset.armed) { cancel.dataset.armed = '1'; cancel.textContent = 'Cancelar'; }
+  if (!onCancel) delete cancel.dataset.armed;
+}
+
+function safeFileName(name) {
+  // Algunos sistemas no aceptan tildes o símbolos en el nombre de las descargas
+  return name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[ñÑ]/g, (c) => (c === 'ñ' ? 'n' : 'N'))
+    .replace(/[^\w .,()\-]+/g, ' ').replace(/\s+/g, ' ').trim() || 'archivo';
 }
 
 function download(name, data, type) {
+  name = safeFileName(name);
   const blob = data instanceof Blob ? data : new Blob([data], { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -182,7 +203,7 @@ function applyAppearance() {
   document.body.classList.toggle('no-pages', !settings.showPages);
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.content = getComputedStyle(root).getPropertyValue('--bg').trim() || '#2c6e63';
-  media.enabled = settings.mediaSession;
+  media.enabled = settings.mediaSession && player.engine !== neural;
   media.setKeepScreenOn(settings.keepScreenOn);
 }
 
@@ -522,7 +543,7 @@ async function openReader(id) {
   db.updateDoc(id, { lastOpenedAt: meta.lastOpenedAt });
   player.configure(settings);
   player.load(meta, cont);
-  pickVoice();
+  await pickVoice();
   $('#r-title').textContent = meta.title;
   $('#seek').max = Math.max(0, player.sentences.length - 1);
   currentSpan = null;
@@ -820,7 +841,9 @@ player.addEventListener('error', (e) => {
     'voice-unavailable': 'La voz elegida no está disponible. Elige otra en «Voz».',
     'synthesis-unavailable': 'El motor de voz no está disponible.',
     'network': 'La voz elegida necesita internet. Elige una voz local en «Voz».',
-    'audio-busy': 'El audio está ocupado por otra app.'
+    'audio-busy': 'El audio está ocupado por otra app.',
+    'synthesis-failed': 'La voz neural no pudo generar el audio. Prueba otra voz o la del sistema en «Voz».',
+    'audio-error': 'No se pudo reproducir el audio de la voz neural.'
   };
   toast(msgs[err] || `Error de voz (${err}).`, { duration: 5000 });
 });
@@ -853,8 +876,31 @@ document.addEventListener('keydown', (e) => {
 
 // =================================================================== voz
 
-function pickVoice() {
+let downloading = null; // { key, fraction, label, ctrl }
+
+function neuralActive() {
+  return player.engine === neural;
+}
+
+/** Elige el motor y la voz para el idioma del documento abierto. */
+async function pickVoice() {
   const lang = current?.meta?.lang || 'es';
+  const key = settings.neuralVoices?.[lang];
+  const nv = key ? findVoice(key) : null;
+  if (nv && neural.supported && (await isRuntimeReady()) && (await isVoiceDownloaded(nv))) {
+    neural.setVoice(nv, settings.neuralSpeakers?.[nv.key] || 0).catch((e) => {
+      toast('No se pudo cargar la voz neural: ' + e.message, { duration: 6000 });
+      delete settings.neuralVoices[lang];
+      saveSettings();
+      pickVoice();
+    });
+    player.setEngine(neural);
+    media.enabled = false; // el propio audio de la voz activa los controles del sistema
+    $('#voice-label').textContent = '✦ ' + nv.name;
+    return;
+  }
+  player.setEngine(engine);
+  media.enabled = settings.mediaSession;
   const v = engine.pickVoice(lang, settings.voices[lang]);
   player.setVoice(v);
   $('#voice-label').textContent = v ? shortVoiceName(v) : 'Voz';
@@ -864,11 +910,23 @@ function shortVoiceName(v) {
   return v.name.replace(/^(Microsoft|Google|Apple)\s+/i, '').replace(/\s*\(.*?\)\s*/g, ' ').replace(/ - .*$/, '').trim().slice(0, 18) || v.lang;
 }
 
-engine.onvoiceschanged = () => { if (current) pickVoice(); };
+engine.onvoiceschanged = () => { if (current && !neuralActive()) pickVoice(); };
+neural.onstatus = (s) => document.body.classList.toggle('synthesizing', s === 'synth');
+neural.onexternalpause = () => { if (player.playing) player.pause(); };
 
-$('#btn-voice').addEventListener('click', openVoiceSheet);
+$('#btn-voice').addEventListener('click', () => openVoiceSheet());
 
-async function openVoiceSheet() {
+const SAMPLES = {
+  es: 'Hola. Así sonará la lectura de tus libros, con pausas en comas, puntos y párrafos.',
+  en: 'Hello. This is how your books will sound, with pauses at commas and periods.',
+  pt: 'Olá. É assim que seus livros vão soar.',
+  fr: 'Bonjour. Voici comment vos livres seront lus.',
+  it: 'Ciao. Ecco come suoneranno i tuoi libri.',
+  de: 'Hallo. So werden deine Bücher klingen.'
+};
+
+async function openVoiceSheet({ keepScroll = false, showAll = false } = {}) {
+  const prevScroll = keepScroll ? $('#sheet-body').scrollTop : 0;
   await engine.loadVoices();
   const lang = current?.meta?.lang || 'es';
   const body = el('<div></div>');
@@ -881,23 +939,56 @@ async function openVoiceSheet() {
     player.doc.meta.lang = sel.value;
     player.chunkCache.clear();
     await db.updateDoc(current.meta.id, { lang: sel.value });
-    pickVoice();
+    await pickVoice();
     openVoiceSheet();
   });
   body.appendChild(langField);
 
+  // ---------------------------------------------------------------- neuronales
+  body.appendChild(sectionTitle('✦ Voces neuronales · alta calidad'));
+  if (!neural.supported) {
+    body.appendChild(el('<div class="note">Este navegador no permite voces neuronales. Usa Chrome actualizado.</div>'));
+  } else {
+    const runtimeReady = await isRuntimeReady();
+    const downloaded = await downloadedKeys();
+    const activeKey = neuralActive() ? neural.voice?.key : null;
+    const intro = el('<p class="muted small" style="margin:0 0 6px"></p>');
+    intro.textContent = `Suenan como una persona y funcionan sin internet. Se descargan una sola vez${runtimeReady ? '' : ` (motor de voz ${fmtSize(RUNTIME_SIZE)} + la voz)`}; conviene usar Wi-Fi.`;
+    body.appendChild(intro);
+    const list = allVoices().filter((v) => showAll || v.lang === lang);
+    if (!list.length) body.appendChild(el('<p class="muted small">No hay voces neuronales para este idioma.</p>'));
+    for (const v of list) body.appendChild(neuralRow(v, { downloaded: downloaded.has(v.key), active: v.key === activeKey, lang }));
+    const tools = el(`<div class="btn-row">
+      <button class="btn small secondary" id="nv-all"></button>
+      <button class="btn small secondary" id="nv-import"><svg class="ic"><use href="#i-upload"/></svg> Agregar desde archivos</button></div>`);
+    $('#nv-all', tools).textContent = showAll ? 'Sólo este idioma' : 'Ver otros idiomas';
+    $('#nv-all', tools).onclick = () => openVoiceSheet({ keepScroll: true, showAll: !showAll });
+    $('#nv-import', tools).onclick = () => $('#voice-input').click();
+    body.appendChild(tools);
+    const rtf = neural.realTimeFactor;
+    if (neuralActive() && rtf) {
+      const perf = el('<p class="small" style="margin:4px 0"></p>');
+      perf.textContent = rtf < 0.85
+        ? `Tu teléfono genera la voz ${(1 / rtf).toFixed(1)}× más rápido que el tiempo real. ✓`
+        : `Tu teléfono genera la voz más lento que el tiempo real (puede haber cortes). Prueba una voz «Rápida».`;
+      perf.classList.toggle('muted', rtf < 0.85);
+      body.appendChild(perf);
+    }
+    if (neuralActive()) body.appendChild(exportSection());
+  }
+
+  // ---------------------------------------------------------------- sistema
+  body.appendChild(sectionTitle('Voces del sistema'));
   let voices = engine.voicesFor(lang);
-  const all = !voices.length;
-  if (all) {
-    body.appendChild(el(`<div class="note">No se encontraron voces para este idioma en el dispositivo. Se muestran todas las disponibles. Lee abajo cómo instalar voces.</div>`));
+  if (!voices.length) {
+    body.appendChild(el('<div class="note">No se encontraron voces del sistema para este idioma. Se muestran todas las disponibles.</div>'));
     voices = engine.voices.slice();
   }
   if (!engine.supported || !engine.voices.length) {
-    body.appendChild(el(`<div class="note">Este navegador no ofrece voces. En Android usa <b>Chrome</b>; en iPhone/iPad usa <b>Safari</b>.</div>`));
+    body.appendChild(el('<div class="note">Este navegador no ofrece voces del sistema. En Android usa <b>Chrome</b>; en iPhone/iPad usa <b>Safari</b>.</div>'));
   }
   voices.sort((a, b) => (b.localService - a.localService) || a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name));
-  const curURI = player.voice?.voiceURI;
-  body.appendChild(sectionTitle(`Voces (${voices.length})`));
+  const curURI = neuralActive() ? null : player.voice?.voiceURI;
   for (const v of voices) {
     const row = el(`<div class="list-item">
       <span class="radio"></span>
@@ -911,49 +1002,259 @@ async function openVoiceSheet() {
     badge.textContent = v.localService ? 'sin conexión' : 'en línea';
     sub.appendChild(badge);
     if (v.default) sub.appendChild(document.createTextNode(' · predeterminada'));
-    row.addEventListener('click', (e) => {
+    row.addEventListener('click', async (e) => {
       if (e.target.closest('button')) return;
       settings.voices[lang] = v.voiceURI;
+      if (settings.neuralVoices) delete settings.neuralVoices[lang];
       saveSettings();
+      await pickVoice();
       player.setVoice(v);
       $('#voice-label').textContent = shortVoiceName(v);
-      $$('.radio', body).forEach((r) => r.classList.remove('on'));
-      $('.radio', row).classList.add('on');
+      openVoiceSheet({ keepScroll: true, showAll });
     });
-    $('button', row).addEventListener('click', () => testVoice(v));
+    $('button', row).addEventListener('click', () => testSystemVoice(v));
     body.appendChild(row);
   }
-  body.appendChild(sectionTitle('Voces sin conexión'));
+  body.appendChild(sectionTitle('Ayuda'));
   body.appendChild(el(voiceHelpHtml()));
   openSheet('Voz', body);
+  if (prevScroll) $('#sheet-body').scrollTop = prevScroll;
 }
 
-function testVoice(v) {
+function neuralRow(v, { downloaded, active, lang }) {
+  const row = el(`<div class="list-item nv-row">
+    <span class="radio"></span>
+    <div class="grow"><div class="t"></div><div class="sub"></div><div class="nv-progress hidden"><progress max="1" value="0"></progress><span></span></div></div>
+    <div class="nv-actions"></div></div>`);
+  const radio = $('.radio', row);
+  radio.classList.toggle('on', active);
+  radio.classList.toggle('disabled', !downloaded);
+  const t = $('.t', row);
+  t.textContent = `${v.name}${v.region ? ' · ' + v.region : ''} `;
+  const q = el('<span class="voice-badge local"></span>');
+  q.textContent = v.quality || 'Neural';
+  t.appendChild(q);
+  if (v.recommended) {
+    const r = el('<span class="voice-badge rec">Recomendada</span>');
+    t.appendChild(document.createTextNode(' '));
+    t.appendChild(r);
+  }
+  $('.sub', row).textContent = [v.note, downloaded ? 'Descargada' : fmtSize(v.size)].filter(Boolean).join(' · ');
+  const actions = $('.nv-actions', row);
+  const btn = (label, cls, fn, aria) => {
+    const b = document.createElement('button');
+    b.className = 'btn small ' + cls;
+    b.innerHTML = label;
+    if (aria) b.setAttribute('aria-label', aria);
+    b.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
+    actions.appendChild(b);
+    return b;
+  };
+  if (downloading && downloading.key === v.key) {
+    const pr = $('.nv-progress', row);
+    pr.classList.remove('hidden');
+    downloading.el = pr;
+    updateDownloadUI();
+    btn('Cancelar', 'secondary', () => downloading && downloading.ctrl.abort());
+  } else if (downloaded) {
+    btn('Probar', 'secondary', () => selectNeural(v, lang, { test: true }));
+    btn('<svg class="ic"><use href="#i-trash"/></svg>', 'secondary icon-only', () => removeNeural(v, lang), 'Eliminar voz');
+    row.addEventListener('click', () => selectNeural(v, lang));
+  } else {
+    if (v.sampleUrl) btn('Muestra', 'secondary', () => playSample(v));
+    btn('<svg class="ic"><use href="#i-download"/></svg> Descargar', 'primary', () => startDownload(v, lang));
+  }
+  if (downloaded && active && v.speakers > 1) {
+    const names = v.key === 'es_ES-sharvard-medium' ? ['Masculina', 'Femenina'] : Array.from({ length: v.speakers }, (_, i) => `Voz ${i + 1}`);
+    const seg = segRow(names.map((n, i) => [i, n]), settings.neuralSpeakers?.[v.key] || 0, (i) => {
+      settings.neuralSpeakers = { ...(settings.neuralSpeakers || {}), [v.key]: i };
+      saveSettings();
+      neural.setVoice(v, i);
+      if (player.playing) player.restart();
+    });
+    seg.style.marginTop = '8px';
+    $('.grow', row).appendChild(seg);
+  }
+  return row;
+}
+
+function updateDownloadUI() {
+  if (!downloading || !downloading.el || !downloading.el.isConnected) return;
+  $('progress', downloading.el).value = downloading.fraction;
+  $('span', downloading.el).textContent = `${Math.floor(downloading.fraction * 100)}% · ${downloading.label}`;
+}
+
+async function startDownload(v, lang) {
+  if (downloading) return toast('Ya hay una descarga en curso');
+  if (navigator.onLine === false) return toast('Necesitas conexión a internet para descargar la voz.');
+  const ctrl = new AbortController();
+  downloading = { key: v.key, fraction: 0, label: 'Iniciando…', ctrl };
+  openVoiceSheet({ keepScroll: true });
+  try {
+    await downloadVoice(v, {
+      signal: ctrl.signal,
+      onProgress: (f, label) => { if (downloading) { downloading.fraction = f; downloading.label = label; updateDownloadUI(); } }
+    });
+    downloading = null;
+    await selectNeural(v, lang);
+    toast(`Voz «${v.name}» lista. Ya funciona sin conexión.`, { duration: 5000 });
+  } catch (e) {
+    downloading = null;
+    if (e.name !== 'AbortError') alert(`No se pudo descargar la voz: ${e.message}\n\nRevisa tu conexión a internet y el espacio libre.`);
+    if (sheetOpen && $('#sheet-title').textContent === 'Voz') openVoiceSheet({ keepScroll: true });
+  }
+}
+
+async function selectNeural(v, lang, { test = false } = {}) {
+  settings.neuralVoices = { ...(settings.neuralVoices || {}), [lang]: v.key };
+  saveSettings();
   const wasPlaying = player.playing;
-  if (wasPlaying) player.pause();
-  const sample = {
-    es: 'Hola. Así sonará la lectura de tus libros, con pausas en comas, puntos y párrafos.',
-    en: 'Hello. This is how your books will sound, with pauses at commas and periods.',
-    pt: 'Olá. É assim que seus livros vão soar.',
-    fr: 'Bonjour. Voici comment vos livres seront lus.',
-    it: 'Ciao. Ecco come suoneranno i tuoi libri.',
-    de: 'Hallo. So werden deine Bücher klingen.'
-  }[(v.lang || 'es').slice(0, 2)] || 'Hola.';
+  if (test && wasPlaying) player.pause();
+  await pickVoice();
+  if (sheetOpen && $('#sheet-title').textContent === 'Voz') openVoiceSheet({ keepScroll: true });
+  if (test) {
+    try {
+      await neural.ensureLoaded();
+      neural.cancel();
+      neural.unlock();
+      neural.speak(SAMPLES[v.lang] || SAMPLES.es, { onerror: (e) => toast('Error al probar la voz: ' + (e.message || e.error)) });
+    } catch (e) {
+      toast('No se pudo cargar la voz: ' + e.message);
+    }
+  }
+}
+
+async function removeNeural(v, lang) {
+  if (!confirm(`¿Eliminar la voz «${v.name}» del teléfono? Podrás descargarla de nuevo.`)) return;
+  if (neuralActive() && neural.voice?.key === v.key) player.pause();
+  await deleteVoice(v);
+  for (const [l, k] of Object.entries(settings.neuralVoices || {})) if (k === v.key) delete settings.neuralVoices[l];
+  saveSettings();
+  await pickVoice();
+  openVoiceSheet({ keepScroll: true });
+  toast('Voz eliminada');
+}
+
+let sampleAudio = null;
+function playSample(v) {
+  if (player.playing) player.pause();
+  if (sampleAudio) sampleAudio.pause();
+  sampleAudio = new Audio();
+  sampleAudio.crossOrigin = 'anonymous';
+  sampleAudio.src = v.sampleUrl;
+  sampleAudio.play().catch(() => toast('La muestra necesita conexión a internet.'));
+  sampleAudio.onerror = () => toast('Muestra no disponible.');
+}
+
+$('#voice-input').addEventListener('change', async (e) => {
+  const files = [...e.target.files];
+  e.target.value = '';
+  if (!files.length) return;
+  busy('Guardando voz…');
+  try {
+    if (!(await isRuntimeReady())) {
+      busy('Descargando el motor de voz…', 0);
+      await downloadRuntime({ onProgress: (f) => busy('Descargando el motor de voz…', f) });
+    }
+    const v = await importVoiceFiles(files);
+    busy(false);
+    await selectNeural(v, current?.meta?.lang || v.lang);
+    toast(`Voz «${v.name}» agregada`);
+  } catch (err) {
+    busy(false);
+    alert('No se pudo agregar la voz: ' + err.message);
+  }
+});
+
+function testSystemVoice(v) {
+  if (player.playing) player.pause();
   engine.cancel();
-  engine.speak(sample, { voice: v, rate: settings.rate, pitch: settings.pitch });
+  engine.speak(SAMPLES[(v.lang || 'es').slice(0, 2)] || 'Hola.', { voice: v, rate: settings.rate, pitch: settings.pitch });
+}
+
+// ------------------------------------------------------------ exportar a MP3
+
+function exportRange(scope) {
+  const p = player.sentences[player.idx]?.p ?? 0;
+  if (scope === 'book') return { from: 0, to: player.sentences.length, label: '' };
+  const chs = current.content.chapters || [];
+  const ci = chapterIndexFor(p);
+  const startP = ci >= 0 ? chs[ci].p : 0;
+  const endP = player.chapterEndParagraph(p);
+  return {
+    from: player.paraFirst[startP] ?? 0,
+    to: endP < player.paraFirst.length ? player.paraFirst[endP] : player.sentences.length,
+    label: ci >= 0 ? chs[ci].title : ''
+  };
+}
+
+function exportSection() {
+  const wrap = el('<div></div>');
+  wrap.appendChild(sectionTitle('Exportar audio MP3'));
+  const ch = exportRange('chapter');
+  const bk = exportRange('book');
+  const dur = (r) => fmtDuration(player.secondsBetween(r.from, r.to) * (settings.rate || 1));
+  const hasChapters = (current.content.chapters || []).length > 0;
+  const info = el('<p class="muted small" style="margin:0 0 6px">Genera un archivo de audio con la voz neural para escucharlo en cualquier reproductor. Mantén la app abierta mientras se crea.</p>');
+  wrap.appendChild(info);
+  const row = el('<div class="btn-row"></div>');
+  if (hasChapters) {
+    const b1 = el('<button class="btn secondary"></button>');
+    b1.textContent = `Capítulo actual (≈ ${dur(ch)})`;
+    b1.onclick = () => exportAudio('chapter');
+    row.appendChild(b1);
+  }
+  const b2 = el('<button class="btn secondary"></button>');
+  b2.textContent = `${hasChapters ? 'Libro completo' : 'Documento'} (≈ ${dur(bk)})`;
+  b2.onclick = () => exportAudio('book');
+  row.appendChild(b2);
+  wrap.appendChild(row);
+  return wrap;
+}
+
+async function exportAudio(scope) {
+  if (!neuralActive() || !current) return;
+  if (player.playing) player.pause();
+  const r = exportRange(scope);
+  const ctrl = { cancelled: false };
+  closeSheet();
+  media.requestWake();
+  busy('Preparando la exportación…', 0, { onCancel: () => { ctrl.cancelled = true; } });
+  try {
+    const blob = await exportMp3({
+      engine: neural,
+      player,
+      from: r.from,
+      to: r.to,
+      signal: ctrl,
+      onProgress: (f, eta) => busy(`Exportando audio… ${Math.floor(f * 100)}%${eta ? `\nQuedan ≈ ${fmtDuration(eta)}` : ''}`, f, { onCancel: () => { ctrl.cancelled = true; } })
+    });
+    busy(false);
+    const name = `${current.meta.title}${r.label ? ' - ' + r.label : ''}.mp3`.replace(/[\\/:*?"<>|]+/g, ' ');
+    download(name, blob);
+    toast(`Audio exportado: ${fmtSize(blob.size)}`, { duration: 5000 });
+  } catch (e) {
+    busy(false);
+    if (e.name !== 'AbortError') alert('No se pudo exportar el audio: ' + e.message);
+    else toast('Exportación cancelada');
+  } finally {
+    if (!settings.keepScreenOn) media.releaseWake();
+  }
 }
 
 function voiceHelpHtml() {
-  return `<div class="note">
-    <b>Android</b> (motor «Servicios de voz de Google»):
+  return `<div><div class="note">
+    <b>Voces neuronales</b>: se generan en tu teléfono con inteligencia artificial (Piper), sin enviar el texto a internet. La primera vez descargan el motor y la voz; después funcionan sin conexión, también con la pantalla apagada.
+  </div>
+  <div class="note">
+    <b>Voces del sistema en Android</b> (motor «Servicios de voz de Google»):
     <ol>
       <li>Ajustes → Sistema → Idiomas → <i>Salida de texto a voz</i>.</li>
       <li>Motor preferido: <i>Servicios de voz de Google</i> → ⚙️ → <i>Instalar datos de voz</i>.</li>
-      <li>Descarga <i>Español</i> (y otras voces que quieras). Así funciona sin internet.</li>
+      <li>Descarga <i>Español</i>. Así funciona sin internet.</li>
     </ol>
     <b>iPhone / iPad</b>: Ajustes → Accesibilidad → Contenido leído → Voces → Español → descarga una voz «Mejorada».
-    <p class="small muted" style="margin:8px 0 0">Las voces marcadas «en línea» necesitan internet; elige una «sin conexión» para usar la app offline.</p>
-  </div>`;
+  </div></div>`;
 }
 
 // =================================================================== velocidad
@@ -994,6 +1295,7 @@ $('#btn-speed').addEventListener('click', () => {
     onInput: (v) => { settings.pitch = v; saveSettings(); clearTimeout(rateTimer); rateTimer = setTimeout(() => player.setPitch(v), 300); }
   }));
   body.appendChild(el('<p class="muted small">Consejo: muchas voces suenan naturales hasta 1.5×–2×. Por encima de eso depende del motor de voz del dispositivo.</p>'));
+  if (player.engine === neural) body.appendChild(el('<p class="muted small">El tono no se aplica a las voces neuronales ✦.</p>'));
   refresh();
   openSheet('Velocidad', body);
 });
@@ -1288,7 +1590,8 @@ async function openSettings() {
     iPhone (Safari): botón Compartir → <i>Agregar a inicio</i>.<br>
     Una vez instalada funciona sin conexión. En Android también puedes <i>Compartir</i> un PDF o EPUB desde otra app hacia «En Voz Alta».</div>`));
   body.appendChild(el(`<div class="note"><b>Limitaciones conocidas</b><ul>
-    <li>Con la pantalla apagada la lectura depende del navegador; si se detiene, activa «Mantener la pantalla encendida».</li>
+    <li>Con las voces del sistema, la lectura con la pantalla apagada depende del navegador; si se detiene, usa una voz neural ✦ o activa «Mantener la pantalla encendida».</li>
+    <li>Las voces neuronales necesitan un teléfono de gama media o superior; en equipos lentos usa la voz «Rápida».</li>
     <li>Los PDF escaneados (sólo imagen) no tienen texto y no pueden leerse.</li>
     <li>La calidad de la voz depende de las voces instaladas en el dispositivo.</li></ul></div>`));
   body.appendChild(el(`<p class="muted small" style="text-align:center">En Voz Alta ${VERSION} · Tus archivos nunca salen de este dispositivo.</p>`));
@@ -1519,4 +1822,4 @@ async function init() {
 init();
 
 // Exponer para depuración y pruebas automatizadas
-window.__evz = { player, engine, db, settings: () => settings, importFiles };
+window.__evz = { player, engine, neural, db, settings: () => settings, importFiles };

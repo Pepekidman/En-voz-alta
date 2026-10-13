@@ -159,9 +159,11 @@
       <div class="spinner"></div>
       <div id="busy-text">Procesando…</div>
       <progress id="busy-progress" max="1" value="0"></progress>
+      <button id="busy-cancel" class="btn secondary small hidden" style="margin-top:14px">Cancelar</button>
     </div>
   </div>
 
   <input type="file" id="backup-input" accept=".json,application/json" hidden>
+  <input type="file" id="voice-input" accept=".onnx,.json,application/json" multiple hidden>
 </body>
 </html>

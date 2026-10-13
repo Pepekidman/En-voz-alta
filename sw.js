@@ -16,6 +16,12 @@ const ASSETS = [
   'js/parsers/index.js',
   'js/parsers/common.js',
   'js/parsers/pdf.js',
+  'js/neural/engine.js',
+  'js/neural/voices.js',
+  'js/neural/worker.js',
+  'js/neural/export.js',
+  'js/neural/mp3-worker.js',
+  'vendor/lame/lame.min.js',
   'vendor/pdfjs/pdf.min.js',
   'vendor/pdfjs/pdf.worker.min.js',
   'vendor/jszip/jszip.min.js',
@@ -78,6 +84,21 @@ async function handleShare(request) {
   return Response.redirect('./?share=1', 303);
 }
 
+// Aislamiento entre orígenes: permite que el motor de voz neural use varios
+// hilos (SharedArrayBuffer). GitHub Pages no permite configurar estas cabeceras,
+// así que las añade el service worker a las respuestas que sirve.
+function isolate(res) {
+  if (!res || res.type === 'opaque' || res.status === 0) return res;
+  const headers = new Headers(res.headers);
+  headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+  headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
+  headers.set('Cross-Origin-Resource-Policy', 'same-origin');
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
+// El motor neural (≈30 MB) lo guarda la app en su propia caché al activarlo.
+const RUNTIME_PATH = /\/vendor\/(ort|piper)\//;
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
@@ -92,18 +113,19 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       caches.match('index.html').then((cached) => cached || fetch(req))
         .catch(() => caches.match('index.html'))
+        .then(isolate)
     );
     return;
   }
   event.respondWith(
     caches.match(req, { ignoreSearch: true }).then((cached) => {
-      if (cached) return cached;
+      if (cached) return isolate(cached);
       return fetch(req).then((res) => {
-        if (res.ok && res.type === 'basic') {
+        if (res.ok && res.type === 'basic' && !RUNTIME_PATH.test(url.pathname)) {
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put(req, copy));
         }
-        return res;
+        return isolate(res);
       });
     })
   );

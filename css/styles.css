@@ -397,3 +397,30 @@ input[type='range'] { width: 100%; accent-color: var(--accent); height: 28px; ma
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* ---------- Voces neuronales ---------- */
+.nv-row { align-items: flex-start; cursor: pointer; }
+.nv-row .radio { margin-top: 3px; }
+.nv-row .radio.disabled { opacity: 0.3; }
+.nv-actions { display: flex; gap: 6px; flex: none; align-items: center; }
+.nv-actions .btn { padding: 7px 10px; }
+.nv-actions .icon-only { padding: 7px; }
+.nv-actions .icon-only .ic { width: 18px; height: 18px; }
+.nv-actions .btn .ic { width: 16px; height: 16px; }
+.nv-progress { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; font-size: 0.78rem; color: var(--muted); }
+.nv-progress progress { width: 100%; accent-color: var(--accent); }
+.voice-badge.rec { background: rgba(255, 197, 61, 0.25); color: #8a5a00; }
+:root[data-theme='dark'] .voice-badge.rec, :root[data-theme='black'] .voice-badge.rec { color: #ffd166; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme]) .voice-badge.rec { color: #ffd166; } }
+@media (max-width: 420px) {
+  .nv-row { flex-wrap: wrap; }
+  .nv-row .grow { flex-basis: calc(100% - 40px); }
+  .nv-actions { width: 100%; justify-content: flex-end; }
+}
+.synthesizing .play { position: relative; }
+.synthesizing .play::after {
+  content: ''; position: absolute; inset: -5px; border-radius: 50%;
+  border: 3px solid transparent; border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite;
+}
+#busy-text { white-space: pre-line; }
