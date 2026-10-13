@@ -11,8 +11,10 @@ import {
   deleteVoice, importVoiceFiles, fmtSize, RUNTIME_SIZE
 } from './neural/voices.js';
 import { exportMp3 } from './neural/export.js';
+import { initExplore } from './explore.js';
+import { makeThumbnail } from './parsers/common.js';
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 
 const DEFAULTS = {
   rate: 1,
@@ -42,6 +44,7 @@ const DEFAULTS = {
   keepScreenOn: false,
   autoPlay: false,
   pdfCleanup: true,
+  downloadProxy: '', // servidor de descarga opcional para «Explorar»
   sort: 'recent'
 };
 
@@ -440,7 +443,10 @@ async function importFiles(files) {
         pdfCleanup: settings.pdfCleanup,
         onProgress: (p, label) => busy(`${file.name}\n${label || ''}`, p)
       });
-      imported.push(await saveParsed(res, { fileName: file.name, size: file.size }));
+      // Libros de Project Gutenberg bajados con el navegador (pg2000-images-3.epub…)
+      const pg = /^pg(\d+)\b/i.exec(file.name || '');
+      const extra = pg ? { sourceId: `gutenberg:${pg[1]}`, sourceUrl: `https://www.gutenberg.org/ebooks/${pg[1]}` } : {};
+      imported.push(await saveParsed(res, { fileName: file.name, size: file.size, extra }));
     } catch (e) {
       console.error(e);
       failed++;
@@ -454,7 +460,7 @@ async function importFiles(files) {
   else if (imported.length) toast(`${imported.length} documento(s) agregado(s)`);
 }
 
-async function saveParsed(res, { fileName = '', size = 0 } = {}) {
+async function saveParsed(res, { fileName = '', size = 0, extra = {} } = {}) {
   const id = uid();
   const chars = res.paragraphs.reduce((n, p) => n + p.x.length, 0);
   const meta = {
@@ -471,9 +477,28 @@ async function saveParsed(res, { fileName = '', size = 0 } = {}) {
     pages: res.pages || null,
     cover: res.cover || null,
     progress: { p: 0, c: 0, pct: 0, updatedAt: Date.now() },
-    bookmarks: []
+    bookmarks: [],
+    ...extra
   };
   await db.addDocument(meta, { id, paragraphs: res.paragraphs, chapters: res.chapters || [] });
+  return meta;
+}
+
+/** Guarda un libro descargado desde «Explorar» con los datos del catálogo. */
+async function importDownloaded(file, { title, author, lang, sourceId, sourceUrl, coverUrl } = {}) {
+  if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+  const res = await parseFile(file, { pdfCleanup: settings.pdfCleanup });
+  if (title) res.title = title;
+  if (author) res.author = author;
+  if (!res.lang && lang) res.lang = lang;
+  if (!res.cover && coverUrl) {
+    try {
+      const r = await fetch(coverUrl, { mode: 'cors', credentials: 'omit' });
+      if (r.ok) res.cover = await makeThumbnail(await r.blob());
+    } catch {}
+  }
+  const meta = await saveParsed(res, { fileName: file.name, size: file.size, extra: { sourceId, sourceUrl } });
+  renderLibrary();
   return meta;
 }
 
@@ -1563,6 +1588,11 @@ async function openSettings() {
   body.appendChild(switchRow('Mantener la pantalla encendida', 'Mientras se lee en voz alta.', settings.keepScreenOn, (v) => { settings.keepScreenOn = v; applyAppearance(); saveSettings(); }));
   body.appendChild(switchRow('Leer al abrir un documento', 'Empieza automáticamente donde te quedaste.', settings.autoPlay, (v) => { settings.autoPlay = v; saveSettings(); }));
 
+  body.appendChild(sectionTitle('Explorar: descargas'));
+  const proxyField = el(`<div class="field"><label for="st-proxy">Servidor de descarga (opcional)</label>
+    <input id="st-proxy" type="url" inputmode="url" placeholder="https://mi-proxy.workers.dev" autocomplete="off"></div>`);
+  body.appendChild(proxyField);
+  body.appendChild(el('<p class="muted small" style="margin-top:0">Project Gutenberg no deja que otras apps descarguen sus libros. Sin servidor, «Agregar a mi biblioteca» los baja con el navegador y luego los agregas con «Agregar archivo». Con un servidor gratuito propio (Cloudflare Workers, ver README del proyecto) se descargan con un toque.</p>'));
   body.appendChild(sectionTitle('Importación'));
   body.appendChild(switchRow('Limpiar PDF', 'Quita encabezados, pies y números de página repetidos y une las líneas cortadas.', settings.pdfCleanup, (v) => { settings.pdfCleanup = v; saveSettings(); }));
 
@@ -1597,6 +1627,15 @@ async function openSettings() {
   body.appendChild(el(`<p class="muted small" style="text-align:center">En Voz Alta ${VERSION} · Tus archivos nunca salen de este dispositivo.</p>`));
 
   openSheet('Ajustes', body);
+  const proxyInput = $('#st-proxy');
+  proxyInput.value = settings.downloadProxy || '';
+  proxyInput.addEventListener('change', () => {
+    const v = proxyInput.value.trim();
+    if (v && !/^https:\/\/[^\s/]+/.test(v)) { toast('La dirección debe empezar con https://'); return; }
+    settings.downloadProxy = v;
+    saveSettings();
+    toast(v ? 'Servidor de descarga guardado' : 'Servidor de descarga desactivado');
+  });
   $('#st-export').onclick = exportBackup;
   $('#st-import').onclick = () => $('#backup-input').click();
   $('button', wipe).onclick = async () => {
@@ -1800,6 +1839,11 @@ async function init() {
   player.configure(settings);
   history.replaceState({ root: true }, '');
   await renderLibrary();
+  initExplore({
+    toast, busy, openReader, renderLibrary, importDownloaded, hashColor, initials, fmtSize, openSheet, closeSheet,
+    listDocs: () => db.listDocs(),
+    getProxy: () => (settings.downloadProxy || '').trim()
+  });
   registerServiceWorker();
   engine.loadVoices();
   await handleShared();

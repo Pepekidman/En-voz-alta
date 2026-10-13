@@ -36,6 +36,13 @@ Lector de documentos en voz alta para el celular. Funciona **sin conexión**, se
 - **Diccionario de pronunciación** propio, con expresiones regulares opcionales, para nombres propios y siglas.
 - Limpieza de PDF: quita encabezados, pies y números de página repetidos, une las palabras cortadas con guion y reconstruye los párrafos.
 
+**Explorar libros gratis (nuevo)**
+- Catálogo de [Project Gutenberg](https://www.gutenberg.org): más de 75.000 libros de dominio público, gratuitos y legales, unos mil de ellos en español. La consulta se hace con la API [Gutendex](https://gutendex.com).
+- Búsqueda por título o autor, con filtros por idioma y 22 categorías (Novela, Cuentos, Poesía, Teatro, Aventuras, Misterio, Ciencia ficción, Historia, Filosofía, Infantil…).
+- Orden por popularidad o por fecha de incorporación. Tocar el nombre de un autor muestra el resto de sus libros.
+- Se descarga el **EPUB**, que trae texto corregido y capítulos; para escuchar es mejor que un PDF escaneado. Al importarlo se quita el aviso legal en inglés de Gutenberg para que no se lea en voz alta.
+- Cada tarjeta indica si el libro ya está en tu biblioteca.
+
 **Biblioteca**
 - Portadas, progreso, búsqueda, varios órdenes, renombrar, cambiar el idioma y exportar el texto.
 - Marcadores con nota, que se pueden exportar.
@@ -62,6 +69,25 @@ Lector de documentos en voz alta para el celular. Funciona **sin conexión**, se
 4. En la app, toca **«Voz»** y elige una voz marcada como *sin conexión*.
 5. Para mejor calidad, en **«Voz» → Voces neuronales ✦** toca **Descargar** en una voz (por ejemplo, *Claude · México*). Conviene hacerlo con Wi-Fi.
    - Si tu teléfono es lento y la voz se corta, usa *Carlfm (Rápida)*. La hoja de voz indica cuánto más rápido que el tiempo real genera el audio tu teléfono.
+
+## Descargas desde «Explorar»
+
+Project Gutenberg no permite que otras apps web descarguen sus archivos: no envía la cabecera CORS. Por eso hay dos modos.
+
+**Sin configurar nada (dos pasos)**
+1. «Agregar a mi biblioteca» abre la descarga en el navegador.
+2. Luego, en la app, tocas «Agregar archivo» y eliges el libro en *Descargas*.
+
+La app reconoce los archivos de Gutenberg (`pg1234…epub`) y los marca en el catálogo.
+
+**Con un toque (servidor de descarga propio, gratis)**
+1. Crea una cuenta gratuita en [Cloudflare](https://dash.cloudflare.com).
+2. Ve a *Workers & Pages → Create → Create Worker*, ponle un nombre (por ejemplo `envozalta-descargas`) y toca **Deploy**.
+3. Toca **Edit code**, reemplaza el código por el de [`tools/cloudflare-worker.js`](tools/cloudflare-worker.js) y vuelve a tocar **Deploy**.
+4. Copia la dirección del worker (`https://envozalta-descargas.<tu-cuenta>.workers.dev`).
+5. En la app: **Ajustes → Explorar: descargas → Servidor de descarga**, pega la dirección.
+
+El worker solo acepta dominios de Project Gutenberg y descarga únicamente lo que pides. El plan gratuito permite 100.000 peticiones al día.
 
 ## Publicación (GitHub Pages)
 
@@ -109,6 +135,8 @@ Las capturas quedan en `tests/output/`.
 | `js/text.js` | Segmentación, limpieza y preparación del texto hablado |
 | `js/parsers/` | Lectores de PDF, EPUB, DOCX, ODT, FB2, HTML, MD, RTF y TXT |
 | `js/media.js` | Controles de la pantalla de bloqueo y pantalla encendida |
+| `js/explore.js`, `js/catalog/` | Pestaña «Explorar»: catálogo de Project Gutenberg (Gutendex), filtros y descargas |
+| `tools/cloudflare-worker.js` | Servidor de descarga opcional para «Explorar» |
 | `js/neural/` | Voces neuronales: catálogo y descargas (`voices.js`), motor y reproducción (`engine.js`), síntesis Piper en un worker (`worker.js`), exportación a MP3 (`export.js`, `mp3-worker.js`) |
 | `js/db.js` | Almacenamiento local (IndexedDB) |
 | `sw.js`, `manifest.webmanifest` | Funcionamiento sin conexión, instalación y «Compartir con» |
@@ -119,6 +147,7 @@ Las capturas quedan en `tests/output/`.
 - **Pantalla apagada con voces del sistema:** la app reproduce un audio silencioso para que el sistema la trate como un reproductor, pero que la voz continúe depende del navegador. Las voces neuronales ✦ no tienen este problema.
 - **Voces neuronales en teléfonos lentos:** si el teléfono genera el audio más lento que el tiempo real, puede haber pausas entre frases. La voz *Carlfm (Rápida)* es la más liviana.
 - **PDF escaneados** (solo imágenes): no tienen texto y no se pueden leer (no hay OCR).
+- **Catálogo:** Gutendex (gutendex.com) es un servicio gratuito mantenido por una persona; si deja de responder, «Explorar» muestra un aviso. No se incluyó Internet Archive: no permite descargas desde apps web y sus PDF son escaneos con texto de calidad irregular para escuchar.
 - **Exportar a MP3** solo es posible con voces neuronales: la síntesis del sistema no permite grabar el audio.
 
 ## Próximos pasos posibles

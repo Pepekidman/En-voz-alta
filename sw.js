@@ -16,6 +16,10 @@ const ASSETS = [
   'js/parsers/index.js',
   'js/parsers/common.js',
   'js/parsers/pdf.js',
+  'js/explore.js',
+  'js/catalog/index.js',
+  'js/catalog/net.js',
+  'js/catalog/gutenberg.js',
   'js/neural/engine.js',
   'js/neural/voices.js',
   'js/neural/worker.js',
@@ -87,11 +91,16 @@ async function handleShare(request) {
 // Aislamiento entre orígenes: permite que el motor de voz neural use varios
 // hilos (SharedArrayBuffer). GitHub Pages no permite configurar estas cabeceras,
 // así que las añade el service worker a las respuestas que sirve.
+// «credentialless» permite mostrar imágenes de otros sitios (portadas del
+// catálogo) sin perder el aislamiento; Safari sólo admite «require-corp».
+const UA = self.navigator.userAgent || '';
+const COEP = /Safari/.test(UA) && !/Chrome|Chromium|CriOS|Android|Edg/.test(UA) ? 'require-corp' : 'credentialless';
+
 function isolate(res) {
   if (!res || res.type === 'opaque' || res.status === 0) return res;
   const headers = new Headers(res.headers);
   headers.set('Cross-Origin-Opener-Policy', 'same-origin');
-  headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
+  headers.set('Cross-Origin-Embedder-Policy', COEP);
   headers.set('Cross-Origin-Resource-Policy', 'same-origin');
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }

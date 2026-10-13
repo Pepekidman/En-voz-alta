@@ -1,6 +1,6 @@
 // Punto de entrada de los lectores de formatos. Cada lector devuelve
 // { title, author, lang, paragraphs: [{t, x, pg?}], chapters: [{title, p, depth?}], cover? }
-import { cleanText, textToParagraphs, chaptersFromHeadings, detectLanguage } from '../text.js';
+import { cleanText, textToParagraphs, chaptersFromHeadings, detectLanguage, stripGutenbergBoilerplate } from '../text.js';
 import { domToParagraphs, decodeText, parseXml, loadJSZip, makeThumbnail, baseName, resolvePath } from './common.js';
 
 export const ACCEPT = '.txt,.text,.md,.markdown,.pdf,.epub,.docx,.odt,.html,.htm,.xhtml,.fb2,.rtf,text/plain,application/pdf,application/epub+zip';
@@ -383,6 +383,7 @@ export function parsePlainText(text) {
 function finalize(res, name) {
   res.paragraphs = (res.paragraphs || []).filter((p) => p.x && p.x.trim());
   if (!res.paragraphs.length) throw new Error('No se encontró texto legible en el archivo.');
+  ({ paragraphs: res.paragraphs, chapters: res.chapters } = stripGutenbergBoilerplate(res.paragraphs, res.chapters || []));
   if (!res.title) {
     const firstH = res.paragraphs.find((p) => p.t === 'h');
     res.title = baseName(name) || (firstH ? firstH.x : res.paragraphs[0].x).slice(0, 80);

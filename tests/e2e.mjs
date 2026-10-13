@@ -116,7 +116,7 @@ const page = await context.newPage();
 const errors = [];
 page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
 page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
-page.on('dialog', (d) => d.accept());
+page.on('dialog', (d) => { if (process.env.E2E_DEBUG) console.log('    [diálogo]', d.message().slice(0, 160)); d.accept(); });
 
 console.log('Biblioteca vacía');
 await page.goto(BASE);
@@ -322,6 +322,101 @@ await page.waitForFunction((n) => document.querySelectorAll('#lib-list .card').l
 check(true, 'documento eliminado');
 await page.screenshot({ path: path.join(OUT, '07-biblioteca-final.png') });
 
+console.log('Explorar libros gratis (API simulada)');
+const CORS = { 'Access-Control-Allow-Origin': '*', 'Cross-Origin-Resource-Policy': 'cross-origin' };
+const gutQueries = [];
+await context.route('https://gutendex.com/books/**', (route) => {
+  const u = new URL(route.request().url());
+  gutQueries.push(Object.fromEntries(u.searchParams));
+  const page = Number(u.searchParams.get('page') || 1);
+  const mk = (id, title, author, lang, extra = {}) => ({
+    id, title, authors: [{ name: author, birth_year: 1547, death_year: 1616 }], subjects: ['Fiction', 'Spain -- Fiction'],
+    bookshelves: ['Category: Novels'], languages: [lang], download_count: 5000 - id,
+    formats: { 'application/epub+zip': `https://www.gutenberg.org/ebooks/${id}.epub3.images`, 'image/jpeg': `https://www.gutenberg.org/cache/epub/${id}/pg${id}.cover.medium.jpg`, ...extra }
+  });
+  const results = page === 1
+    ? [mk(2000, 'Don Quijote', 'Cervantes Saavedra, Miguel de', 'es'), mk(9999, 'Libro sin CORS', 'Autor, Prueba', 'es')]
+    : [mk(3000, 'Novelas ejemplares', 'Cervantes Saavedra, Miguel de', 'es')];
+  route.fulfill({ status: 200, headers: { ...CORS, 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 3, next: page === 1 ? 'https://gutendex.com/books/?page=2' : null, results }) });
+});
+await context.route('https://www.gutenberg.org/**', (route) => {
+  const url = route.request().url();
+  if (url.includes('9999')) return route.abort('failed'); // el navegador lo ve igual que un bloqueo CORS
+  if (url.endsWith('.jpg')) return route.fulfill({ status: 200, headers: { ...CORS, 'Content-Type': 'image/png' }, body: fs.readFileSync(path.join(ROOT, 'icons', 'icon-192.png')) });
+  route.fulfill({ status: 200, headers: { ...CORS, 'Content-Type': 'application/epub+zip' }, body: fs.readFileSync(path.join(FIX, 'prueba.epub')) });
+});
+await page.click('#tab-explore');
+await page.waitForSelector('#ex-list .ex-card');
+check((await page.$$('#ex-list .ex-card')).length === 2, 'muestra resultados del catálogo');
+check(gutQueries[0].languages === 'es' && gutQueries[0].sort === 'popular', 'filtra por español y ordena por popularidad');
+check((await page.textContent('#ex-list .ex-card .card-author')).includes('Miguel de Cervantes Saavedra (1547–1616)'), 'nombre del autor legible');
+check((await page.textContent('#ex-list .ex-card .subjects')).includes('Novela'), 'temas traducidos al español');
+await page.click('#ex-cats .chip:text-is("Poesía")');
+await page.waitForFunction(() => document.querySelectorAll('#ex-list .ex-card').length > 0);
+check(gutQueries[gutQueries.length - 1].topic === 'poetry', 'filtro por categoría');
+await page.fill('#ex-search', 'cervantes');
+await page.press('#ex-search', 'Enter');
+await page.waitForFunction(() => document.querySelectorAll('#ex-list .ex-card').length > 0);
+check(gutQueries[gutQueries.length - 1].search === 'cervantes', 'búsqueda por título o autor');
+await page.click('#ex-more');
+await page.waitForFunction(() => document.querySelectorAll('#ex-list .ex-card').length === 3);
+check(true, 'cargar más resultados (paginación)');
+await page.screenshot({ path: path.join(OUT, '10-explorar.png') });
+await page.click('#ex-list .ex-card:has-text("Don Quijote") .btn.primary');
+await page.waitForSelector('#ex-list .ex-card:has-text("Don Quijote") .btn:has-text("Abrir")', { timeout: 15000 });
+const added = await page.evaluate(async () => (await window.__evz.db.listDocs()).find((d) => d.sourceId === 'gutenberg:2000'));
+check(added && added.title === 'Don Quijote' && added.author.startsWith('Miguel de Cervantes') && !!added.cover, 'libro descargado y guardado con título, autor y portada');
+const navs = [];
+context.on('request', (r) => { if (r.isNavigationRequest()) navs.push(r.url()); });
+await page.click('#ex-list .ex-card:has-text("Libro sin CORS") .btn.primary');
+await page.waitForSelector('.sheet #bd-open', { timeout: 10000 }).catch(() => {});
+check(await page.isVisible('.sheet #bd-open'), 'si el sitio no permite la descarga, explica los dos pasos');
+const [popup] = await Promise.all([
+  context.waitForEvent('page', { timeout: 10000 }).catch(() => null),
+  page.click('.sheet #bd-open').catch(() => {})
+]);
+await page.waitForTimeout(300);
+check(!!popup && navs.some((u) => u.includes('9999.epub')), 'abre la descarga en el navegador');
+if (popup) await popup.close();
+await page.click('#sheet-close');
+// Libro bajado con el navegador y agregado a mano: se reconoce por el nombre del archivo
+const pgFile = path.join(OUT, 'pg9999-images-3.epub');
+fs.copyFileSync(path.join(FIX, 'prueba.epub'), pgFile);
+await page.setInputFiles('#file-input', pgFile);
+await page.waitForSelector('#view-reader.active');
+check(await page.evaluate(async () => !!(await window.__evz.db.listDocs()).find((d) => d.sourceId === 'gutenberg:9999')), 'reconoce el libro de Gutenberg agregado a mano');
+await page.click('#btn-back');
+await page.click('#tab-explore');
+await page.waitForSelector('#ex-list .ex-card:has-text("Libro sin CORS") .btn:has-text("Abrir")', { timeout: 10000 }).catch(() => {});
+check(await page.isVisible('#ex-list .ex-card:has-text("Libro sin CORS") .btn:has-text("Abrir")'), 'el catálogo lo marca como «En tu biblioteca»');
+// Con servidor de descarga propio se descarga con un toque
+const proxied = [];
+await context.route('https://proxy.test/**', (route) => {
+  proxied.push(new URL(route.request().url()).searchParams.get('url'));
+  route.fulfill({ status: 200, headers: { ...CORS, 'Content-Type': 'application/epub+zip' }, body: fs.readFileSync(path.join(FIX, 'prueba.epub')) });
+});
+await page.evaluate(() => { window.__evz.settings().downloadProxy = 'https://proxy.test'; });
+await page.click('#ex-list .ex-card:has-text("Novelas ejemplares") .btn.primary');
+await page.waitForSelector('#ex-list .ex-card:has-text("Novelas ejemplares") .btn:has-text("Abrir")', { timeout: 15000 }).catch(() => {});
+check(proxied.some((u) => u && u.includes('3000.epub')), 'descarga a través del servidor de descarga configurado');
+await page.evaluate(() => { window.__evz.settings().downloadProxy = ''; });
+await context.unroute('https://proxy.test/**');
+await page.waitForSelector('#busy', { state: 'hidden' });
+await page.click('#tab-mine');
+await page.waitForSelector('.card:has(.card-title:text-is("Don Quijote"))');
+check(true, 'aparece en «Mis libros»');
+for (const t of ['Don Quijote', 'Novelas ejemplares', 'Libro de Prueba']) {
+  while (await page.$(`.card:has(.card-title:text-is("${t}")):has(.badge:text-is("epub")) .more`) && (await page.$$('#lib-list .card')).length > files.length) {
+    await page.click(`.card:has(.card-title:text-is("${t}")) >> nth=0 >> .more`);
+    await page.click('#dm-delete');
+    await page.waitForTimeout(300);
+  }
+}
+await page.waitForFunction((n) => document.querySelectorAll('#lib-list .card').length === n, files.length, { timeout: 5000 }).catch(() => {});
+check((await page.$$('#lib-list .card')).length === files.length, 'limpieza de libros de prueba');
+await context.unroute('https://gutendex.com/books/**');
+await context.unroute('https://www.gutenberg.org/**');
+
 console.log('Voces neuronales (modelo de prueba)');
 await openCard('.card:has(.badge:text-is("epub"))');
 await page.click('#btn-voice');
@@ -407,7 +502,8 @@ check(await page.evaluate(() => crossOriginIsolated), 'aislamiento entre orígen
 await page.click('#btn-play');
 await context.setOffline(false);
 
-const relevantErrors = errors.filter((e) => !/favicon/.test(e));
+// ERR_FAILED: la descarga bloqueada que se simula a propósito en «Explorar»
+const relevantErrors = errors.filter((e) => !/favicon|net::ERR_FAILED/.test(e));
 check(relevantErrors.length === 0, 'sin errores de JavaScript' + (relevantErrors.length ? ': ' + relevantErrors.join(' | ') : ''));
 
 await browser.close();

@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   splitSentences, splitLong, toSpeech, romanToInt, detectLanguage, textToParagraphs,
-  joinLines, cleanText, compileDictionary, looksLikeHeading
+  joinLines, cleanText, compileDictionary, looksLikeHeading, stripGutenbergBoilerplate
 } from '../js/text.js';
 
 const sentences = (t) => splitSentences(t).map((p) => t.slice(p.s, p.e).trim());
@@ -113,4 +113,21 @@ test('utilidades de limpieza', () => {
   assert.ok(looksLikeHeading('XIV'));
   assert.ok(!looksLikeHeading('Esto es una frase normal del texto.'));
   assert.ok(!looksLikeHeading('42'));
+});
+
+test('quita el encabezado y la licencia de Project Gutenberg', () => {
+  const P = (x, t = 'p') => ({ t, x });
+  const paras = [
+    P('The Project Gutenberg eBook of Don Quijote'), P('This ebook is for the use of anyone anywhere...'),
+    P('*** START OF THE PROJECT GUTENBERG EBOOK DON QUIJOTE ***'), P('Produced by Juan Pérez'),
+    P('Capítulo primero', 'h'), P('En un lugar de la Mancha...'), P('Texto del libro.'),
+    P('Capítulo segundo', 'h'), P('Más texto.'), P('Fin.'),
+    P('*** END OF THE PROJECT GUTENBERG EBOOK DON QUIJOTE ***'), P('Updated editions will replace the previous one...'), P('License text')
+  ];
+  const chapters = [{ title: 'Capítulo primero', p: 4 }, { title: 'Capítulo segundo', p: 7 }, { title: 'License', p: 12 }];
+  const r = stripGutenbergBoilerplate(paras, chapters);
+  assert.deepEqual(r.paragraphs.map((p) => p.x), ['Capítulo primero', 'En un lugar de la Mancha...', 'Texto del libro.', 'Capítulo segundo', 'Más texto.', 'Fin.']);
+  assert.deepEqual(r.chapters.map((c) => [c.title, c.p]), [['Capítulo primero', 0], ['Capítulo segundo', 3]]);
+  const plain = [P('Uno.'), P('Dos.'), P('Tres.')];
+  assert.equal(stripGutenbergBoilerplate(plain).paragraphs, plain);
 });

@@ -432,3 +432,35 @@ export function chaptersFromHeadings(paragraphs) {
 export function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+
+// ---------------------------------------------------------------------------
+// Limpieza de libros de Project Gutenberg
+
+const PG_START = /\*{3}\s*START OF (THE|THIS) PROJECT GUTENBERG/i;
+const PG_END = /\*{3}\s*END OF (THE|THIS) PROJECT GUTENBERG|^End of (the )?Project Gutenberg'?s?\b/i;
+const PG_CREDITS = /^(produced by|this e-?book was produced by|e-?text prepared by|updated editions will replace|an anonymous volunteer)/i;
+
+/**
+ * Quita el encabezado y la licencia de Project Gutenberg (en inglés) para que
+ * no se lean en voz alta. Ajusta los índices de capítulos.
+ */
+export function stripGutenbergBoilerplate(paragraphs, chapters = []) {
+  const n = paragraphs.length;
+  let start = -1;
+  for (let i = 0; i < Math.min(n, Math.max(60, Math.floor(n * 0.25))); i++) {
+    if (PG_START.test(paragraphs[i].x)) { start = i; break; }
+  }
+  let end = n;
+  for (let i = n - 1; i >= Math.floor(n * 0.6); i--) {
+    if (PG_END.test(paragraphs[i].x)) end = i;
+  }
+  if (start < 0 && end === n) return { paragraphs, chapters };
+  let from = start + 1;
+  while (from < end && from <= start + 6 && PG_CREDITS.test(paragraphs[from].x)) from++;
+  const kept = paragraphs.slice(from, end);
+  if (kept.length < 3) return { paragraphs, chapters };
+  const outChapters = chapters
+    .map((c) => ({ ...c, p: c.p - from }))
+    .filter((c) => c.p >= 0 && c.p < kept.length);
+  return { paragraphs: kept, chapters: outChapters };
+}
