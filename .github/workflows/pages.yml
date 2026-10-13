@@ -47,10 +47,25 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      # Copia de libros de Project Gutenberg (se reutiliza entre publicaciones)
+      - name: Restaurar libros copiados
+        uses: actions/cache@v4
+        with:
+          path: mirror
+          key: libros-${{ github.run_id }}
+          restore-keys: |
+            libros-
+      - name: Copiar libros de Project Gutenberg
+        run: node tools/mirror-books.mjs mirror/libros
+        timeout-minutes: 30
       - name: Preparar sitio
         run: |
           mkdir -p _site
           cp -r index.html manifest.webmanifest sw.js css js vendor icons _site/
+          cp -r mirror/libros _site/libros
           # Nueva versión de caché en cada publicación
           sed -i "s/__BUILD__/${GITHUB_SHA::8}/" _site/sw.js
       - uses: actions/configure-pages@v5

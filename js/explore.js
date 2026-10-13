@@ -13,6 +13,17 @@ let state = null;
 let ticket = 0;
 let downloadingId = null;
 let directBlocked = false; // el sitio no permite descargas directas (CORS)
+let pendingBrowser = null; // libro que se está bajando con el navegador
+
+// Al volver del navegador, recordar cómo agregar el libro descargado
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !pendingBrowser || !deps) return;
+  if (Date.now() - pendingBrowser.at > 15 * 60000) { pendingBrowser = null; return; }
+  const { title } = pendingBrowser;
+  pendingBrowser = null;
+  deps.closeSheet();
+  deps.toast(`¿Ya descargaste «${title}»?`, { action: 'Agregarlo', duration: 15000, onAction: () => document.getElementById('file-input').click() });
+});
 
 function el(html) {
   const t = document.createElement('template');
@@ -24,9 +35,46 @@ function chip(label, on, onClick) {
   const b = document.createElement('button');
   b.type = 'button';
   b.className = 'chip' + (on ? ' on' : '');
+  b.setAttribute('aria-pressed', String(!!on));
   b.textContent = label;
   b.addEventListener('click', onClick);
   return b;
+}
+
+const SHELF_ICONS = { 'col-es': '📚', 'col-negocios': '💼', 'col-mentalidad': '🌱', 'col-estoicos': '🏛️', 'col-meditar': '🧘', 'col-aprender': '🧠', 'col-liderazgo': '🎯' };
+
+function currentCollection() {
+  return source().categories.find((c) => c.id === state.cat && c.ids) || null;
+}
+
+/** Colecciones recomendadas como tarjetas (estantes) al inicio de Explorar. */
+function renderShelves() {
+  const src = source();
+  const cols = src.categories.filter((c) => c.ids);
+  const box = $('#ex-shelves');
+  const col = currentCollection();
+  box.innerHTML = '';
+  box.classList.toggle('hidden', !!col || !!state.q || !!state.cat || !cols.length);
+  $('#ex-col-head').classList.toggle('hidden', !col);
+  if (col) $('#ex-col-title').textContent = col.label.replace(/^★\s*/, '');
+  if (col || state.q || state.cat) return;
+  box.appendChild(el('<h3>Colecciones recomendadas</h3>'));
+  for (const c of cols) {
+    const b = el(`<button class="shelf"><span class="s-icon" aria-hidden="true"></span><span class="s-title"></span><span class="s-desc"></span></button>`);
+    if (c.id === 'col-es') b.classList.add('es');
+    $('.s-icon', b).textContent = SHELF_ICONS[c.id] || '★';
+    $('.s-title', b).textContent = c.label.replace(/^★\s*/, '');
+    $('.s-desc', b).textContent = c.desc ? c.desc.charAt(0).toUpperCase() + c.desc.slice(1) : '';
+    b.addEventListener('click', () => {
+      state.cat = c.id;
+      saveState();
+      renderFilters();
+      search();
+      $('#explore').scrollTop = 0;
+    });
+    box.appendChild(b);
+  }
+  box.appendChild(el('<h3>Todos los libros</h3>'));
 }
 
 function source() {
@@ -78,20 +126,23 @@ function renderFilters() {
 
   const cats = $('#ex-cats');
   cats.innerHTML = '';
-  cats.appendChild(chip('Todas las categorías', !state.cat, () => { state.cat = ''; saveState(); renderFilters(); search(); }));
+  cats.appendChild(chip('Todas las categorías', !state.cat || !!currentCollection(), () => { state.cat = ''; saveState(); renderFilters(); search(); }));
   for (const c of src.categories) {
+    if (c.ids) continue; // las colecciones se muestran como estantes
     cats.appendChild(chip(c.label, state.cat === c.id, () => { state.cat = c.id; saveState(); renderFilters(); search(); }));
   }
+  $('#ex-langs').classList.toggle('hidden', !!currentCollection());
 
   const sort = $('#ex-sort');
   sort.innerHTML = '';
   for (const s of src.sorts) sort.appendChild(new Option(s.label, s.id));
   if (!src.sorts.some((s) => s.id === state.sort)) state.sort = src.sorts[0].id;
   sort.value = state.sort;
-  const col = src.categories.find((c) => c.id === state.cat && c.ids);
+  const col = currentCollection();
   $('#ex-note').textContent = col
-    ? `${col.label.replace(/^★\s*/, '')}: ${col.desc || 'selección de clásicos'}. Incluye libros en todos los idiomas (primero los que están en español).`
+    ? `${col.desc ? col.desc.charAt(0).toUpperCase() + col.desc.slice(1) : 'Selección de clásicos'}. Incluye libros en todos los idiomas, primero los que están en español.`
     : src.note || '';
+  renderShelves();
 }
 
 function setStatus(text) {
@@ -142,7 +193,8 @@ async function search({ append = false } = {}) {
     return;
   }
   state.loading = true;
-  setStatus(append ? 'Cargando más…' : 'Buscando…');
+  setStatus(append ? 'Cargando más…' : '');
+  if (!append) for (let i = 0; i < 3; i++) $('#ex-list').appendChild(el('<div class="skeleton" aria-hidden="true"></div>'));
   try {
     if (!append) {
       const docs = await deps.listDocs();
@@ -153,6 +205,7 @@ async function search({ append = false } = {}) {
     state.items.push(...res.items);
     state.next = res.next;
     const list = $('#ex-list');
+    list.querySelectorAll('.skeleton').forEach((x) => x.remove());
     for (const b of res.items) list.appendChild(bookCard(b, src));
     if (!state.items.length) showEmpty(src);
     else setStatus(res.total ? `${res.total.toLocaleString('es')} libros encontrados` : '');
@@ -160,6 +213,7 @@ async function search({ append = false } = {}) {
   } catch (e) {
     if (my !== ticket) return;
     console.error(e);
+    $('#ex-list').querySelectorAll('.skeleton').forEach((x) => x.remove());
     setStatus(`No se pudo consultar ${src.name}. Revisa tu conexión e inténtalo de nuevo.`);
   } finally {
     if (my === ticket) state.loading = false;
@@ -215,13 +269,14 @@ function bookCard(b, src) {
   }
   $('.subjects', card).textContent = (b.subjects || []).slice(0, 4).join(' · ');
   const meta = $('.card-meta', card);
-  const badge = el('<span class="badge"></span>');
-  badge.textContent = b.format || '';
-  meta.appendChild(badge);
+  if (b.mirrored) {
+    const fast = el('<span class="badge fast" title="Se descarga con un toque">⚡ Directo</span>');
+    meta.appendChild(fast);
+  }
   const span = (t) => { const x = document.createElement('span'); x.textContent = t; meta.appendChild(x); };
   if (b.lang) span((b.lang || '').toUpperCase());
   if (b.year) span(String(b.year));
-  if (b.downloads) span(`${b.downloads.toLocaleString('es')} descargas`);
+  if (b.downloads > 0) span(`${b.downloads.toLocaleString('es')} descargas`);
   if (b.size) span(deps.fmtSize(b.size));
   const actions = $('.ex-actions', card);
   const add = el('<button class="btn primary ex-add"><svg class="ic"><use href="#i-download"/></svg> Agregar a mi biblioteca</button>');
@@ -264,45 +319,56 @@ function openButton(docId) {
 async function addBook(b, src, btn) {
   if (downloadingId) return deps.toast('Espera a que termine la descarga en curso');
   const proxy = deps.getProxy();
-  // Sin servidor de descarga, Gutenberg no deja descargar desde la app: se guía al usuario
-  if (!proxy && directBlocked) return browserDownload(b);
+  // Sin copia propia ni servidor, Gutenberg no deja descargar desde la app: se guía al usuario
+  if (!b.mirrored && !proxy && directBlocked) return browserDownload(b);
   downloadingId = b.id;
   const ctrl = new AbortController();
-  deps.busy(`Descargando «${b.title}»…`, 0, { onCancel: () => ctrl.abort() });
+  const onCancel = () => ctrl.abort();
+  deps.busy(`Descargando «${b.title}»…`, 0, { onCancel });
   try {
-    const file = await src.download(b, {
-      proxy,
-      signal: ctrl.signal,
-      onProgress: (f) => deps.busy(`Descargando «${b.title}»…`, f, { onCancel: () => ctrl.abort() })
-    });
+    // 1) Descarga
+    let file;
+    try {
+      file = await src.download(b, {
+        proxy,
+        signal: ctrl.signal,
+        onProgress: (f) => deps.busy(`Descargando «${b.title}»…`, f, { onCancel })
+      });
+    } catch (e) {
+      deps.busy(false);
+      if (e.name === 'AbortError') deps.toast('Descarga cancelada');
+      else if (e.code === 'CORS' && !b.mirrored && !proxy) {
+        directBlocked = true;
+        browserDownload(b);
+      } else if (e.code === 'CORS' && proxy && !b.mirrored) {
+        deps.showError('El servidor de descarga no respondió', new Error('Revisa su dirección en Ajustes → Explorar: descargas.'), 'explorar');
+      } else {
+        deps.showError('No se pudo descargar el libro', e, 'explorar');
+      }
+      return;
+    }
+    // 2) Importación a la biblioteca
     deps.busy(`Preparando «${b.title}»…`);
-    const meta = await deps.importDownloaded(file, {
-      title: b.title,
-      author: b.authors.join(', '),
-      lang: b.lang,
-      sourceId: `${b.source}:${b.id}`,
-      sourceUrl: b.pageUrl,
-      coverUrl: b.cover && proxy ? src.viaProxy(b.cover, proxy) : b.cover
-    });
+    let meta;
+    try {
+      meta = await deps.importDownloaded(file, {
+        title: b.title,
+        author: b.authors.join(', '),
+        lang: b.lang,
+        sourceId: `${b.source}:${b.id}`,
+        sourceUrl: b.pageUrl,
+        coverUrl: b.cover && proxy && !b.mirrored ? src.viaProxy(b.cover, proxy) : b.cover
+      });
+    } catch (e) {
+      deps.busy(false);
+      const bad = /zip|central directory|no se encontró texto|formato no soportado/i.test(e.message);
+      deps.showError('No se pudo agregar el libro', bad ? new Error('El archivo descargado no es un libro válido. Puedes bajarlo en otro formato desde su ficha.') : e, 'explorar');
+      return;
+    }
     deps.busy(false);
     if (state.owned) state.owned.set(`${b.source}:${b.id}`, meta.id);
     btn.replaceWith(openButton(meta.id));
-    deps.toast(`«${b.title}» está en tu biblioteca`, { action: 'Abrir', onAction: () => deps.openReader(meta.id), duration: 6000 });
-  } catch (e) {
-    deps.busy(false);
-    if (e.name === 'AbortError') deps.toast('Descarga cancelada');
-    else if (e.code === 'CORS' || e.name === 'TypeError') {
-      if (proxy) {
-        deps.toast('El servidor de descarga no respondió. Revisa su dirección en Ajustes.', { duration: 7000 });
-      } else {
-        directBlocked = true;
-        browserDownload(b);
-      }
-    } else {
-      const bad = /zip|central directory|no se encontró texto|formato no soportado/i.test(e.message);
-      const msg = bad ? 'El archivo descargado no es un libro válido. Puedes bajarlo en otro formato desde su ficha.' : `No se pudo agregar el libro: ${e.message}`;
-      deps.toast(msg, { action: 'Ficha', onAction: () => window.open(b.pageUrl, '_blank', 'noopener'), duration: 10000 });
-    }
+    deps.toast(`«${b.title}» está en tu biblioteca`, { action: 'Escuchar', onAction: () => deps.openReader(meta.id, { play: true }), duration: 8000 });
   } finally {
     downloadingId = null;
   }
@@ -311,22 +377,23 @@ async function addBook(b, src, btn) {
 /** Descarga en dos pasos: el navegador baja el archivo y luego se agrega con «Agregar archivo». */
 function browserDownload(b) {
   const body = el(`<div>
-    <p style="margin-top:0;line-height:1.5">Project Gutenberg no permite que otras apps descarguen sus libros directamente. Se hace en dos pasos:</p>
+    <p style="margin-top:0;line-height:1.5">Este libro no se puede bajar directo a la app (Project Gutenberg no lo permite). Se hace en dos pasos:</p>
     <ol style="line-height:1.6;padding-left:20px">
-      <li>Toca <b>Descargar en el navegador</b>. Se bajará el archivo del libro.</li>
-      <li>Vuelve aquí, toca <b>Agregar archivo</b> y elige el libro en <i>Descargas</i>.</li>
+      <li>Toca <b>Descargar en el navegador</b>. Si te pregunta, elige <i>Descargar</i>. <b>No toques «Abrir»</b>.</li>
+      <li>Vuelve a En Voz Alta, toca <b>Agregar archivo</b> y elige el libro en <i>Descargas</i>.</li>
     </ol>
+    <p class="muted small" style="margin:0 0 6px">También puedes buscar el archivo en la app «Archivos» del teléfono y usar <i>Compartir → En Voz Alta</i>.</p>
     <div class="btn-row">
       <a class="btn primary" target="_blank" rel="noopener" id="bd-open"><svg class="ic"><use href="#i-download"/></svg> Descargar en el navegador</a>
     </div>
     <div class="btn-row">
       <button class="btn secondary" id="bd-add"><svg class="ic"><use href="#i-plus"/></svg> Agregar archivo</button>
     </div>
-    <p class="muted small">¿Quieres descargar con un solo toque? Configura un servidor de descarga gratuito en <b>Ajustes → Explorar</b>.</p>
+    <p class="muted small">Los libros marcados <b>⚡ Directo</b> se descargan con un solo toque.</p>
   </div>`);
   const a = body.querySelector('#bd-open');
   a.href = b.fileUrl || b.pageUrl;
-  a.addEventListener('click', () => deps.toast('Cuando termine la descarga, toca «Agregar archivo».', { duration: 6000 }));
+  a.addEventListener('click', () => { pendingBrowser = { title: b.title, at: Date.now() }; });
   body.querySelector('#bd-add').addEventListener('click', () => {
     deps.closeSheet();
     document.getElementById('file-input').click();
@@ -338,15 +405,19 @@ export function initExplore(d) {
   deps = d;
   state = loadState();
   let started = false;
-  const showTab = (tab) => {
+  const isExplore = () => !$('#explore').classList.contains('hidden');
+  const showTab = (tab, { fromPop = false } = {}) => {
     const explore = tab === 'explore';
+    if (explore && !isExplore() && !fromPop) history.pushState({ tab: 'explore' }, '');
+    if (!explore && isExplore() && !fromPop && history.state && history.state.tab === 'explore') deps.historyBack();
     $('#tab-mine').classList.toggle('on', !explore);
     $('#tab-explore').classList.toggle('on', explore);
     $('#tab-mine').setAttribute('aria-selected', String(!explore));
     $('#tab-explore').setAttribute('aria-selected', String(explore));
     $('#mine').classList.toggle('hidden', explore);
     $('#explore').classList.toggle('hidden', !explore);
-    document.querySelector('.fab-row').classList.toggle('hidden', explore);
+    $('#btn-add').classList.toggle('hidden', explore);
+    $(explore ? '#explore' : '#mine').scrollTop = 0;
     if (explore && !started) {
       started = true;
       renderFilters();
@@ -360,12 +431,13 @@ export function initExplore(d) {
   let t = null;
   $('#ex-search').addEventListener('input', (e) => {
     clearTimeout(t);
-    t = setTimeout(() => { state.q = e.target.value.trim(); search(); }, 450);
+    t = setTimeout(() => { state.q = e.target.value.trim(); renderShelves(); search(); }, 450);
   });
   $('#ex-search').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { clearTimeout(t); state.q = e.target.value.trim(); search(); e.target.blur(); }
+    if (e.key === 'Enter') { clearTimeout(t); state.q = e.target.value.trim(); renderShelves(); search(); e.target.blur(); }
   });
   $('#ex-sort').addEventListener('change', (e) => { state.sort = e.target.value; saveState(); search(); });
+  $('#ex-col-back').addEventListener('click', () => { state.cat = ''; saveState(); renderFilters(); search(); });
   $('#ex-more').addEventListener('click', () => {
     if (!state.next || state.loading) return;
     state.page = state.next;
@@ -379,6 +451,6 @@ export function initExplore(d) {
       search({ append: true });
     }
   }, { passive: true });
-  return { showTab };
+  return { showTab, isExplore };
 }
 

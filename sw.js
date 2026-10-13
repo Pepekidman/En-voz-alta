@@ -17,6 +17,7 @@ const ASSETS = [
   'js/parsers/common.js',
   'js/parsers/pdf.js',
   'js/explore.js',
+  'js/log.js',
   'js/catalog/index.js',
   'js/catalog/net.js',
   'js/catalog/gutenberg.js',
@@ -106,7 +107,8 @@ function isolate(res) {
 }
 
 // El motor neural (≈30 MB) lo guarda la app en su propia caché al activarlo.
-const RUNTIME_PATH = /\/vendor\/(ort|piper)\//;
+// Los libros copiados (/libros/) se guardan en la biblioteca al descargarlos.
+const RUNTIME_PATH = /\/vendor\/(ort|piper)\/|\/libros\//;
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;

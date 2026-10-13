@@ -36,8 +36,9 @@ export class MediaControls {
       set('seekbackward', () => handlers.back());
       set('seekforward', () => handlers.forward());
     }
+    this.exporting = false;
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && this.wantWake) this.requestWake();
+      if (document.visibilityState === 'visible' && (this.wantWake || this.exporting)) this.requestWake();
     });
   }
 
@@ -48,10 +49,10 @@ export class MediaControls {
     a.loop = true;
     a.preload = 'auto';
     a.setAttribute('playsinline', '');
-    // Si el sistema detiene el audio (p. ej. foco de audio), lo reanudamos
-    // mientras se siga leyendo; la pausa real llega por el manejador 'pause'.
+    // Si el sistema detiene el audio (llamada, otra app de música), se pausa
+    // también la lectura en lugar de pelear por el audio.
     a.addEventListener('pause', () => {
-      if (!this.selfPaused && this.active) setTimeout(() => this.active && a.play().catch(() => {}), 400);
+      if (!this.selfPaused && this.active && !a.ended) this.handlers.pause();
     });
     this.audio = a;
     return a;
@@ -86,6 +87,12 @@ export class MediaControls {
     }
     if (this.ms) this.ms.playbackState = 'paused';
     this.releaseWake();
+  }
+
+  /** Quita la información del libro de los controles del sistema. */
+  clear() {
+    if (!this.ms) return;
+    try { this.ms.metadata = null; this.ms.playbackState = 'none'; } catch {}
   }
 
   setKeepScreenOn(on) {

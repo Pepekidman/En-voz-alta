@@ -13,8 +13,9 @@ import {
 import { exportMp3 } from './neural/export.js';
 import { initExplore } from './explore.js';
 import { makeThumbnail } from './parsers/common.js';
+import { logError, getLog, clearLog, report, installGlobalHandlers } from './log.js';
 
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 
 const DEFAULTS = {
   rate: 1,
@@ -77,7 +78,7 @@ const engine = new SpeechEngine();
 const neural = new NeuralEngine();
 const player = new Player(engine);
 const media = new MediaControls({
-  play: () => player.play(),
+  play: () => current && player.play(),
   pause: () => player.pause(),
   prev: () => (settings.skipUnit === 'paragraph' ? player.prevParagraph() : player.prevSentence()),
   next: () => (settings.skipUnit === 'paragraph' ? player.nextParagraph() : player.nextSentence()),
@@ -147,7 +148,7 @@ function toast(msg, { action, onAction, duration = 3500 } = {}) {
 function busy(text, progress, { onCancel } = {}) {
   const el = $('#busy');
   const cancel = $('#busy-cancel');
-  if (text === false) { el.classList.add('hidden'); cancel.classList.add('hidden'); cancel.onclick = null; return; }
+  if (text === false) { el.classList.add('hidden'); cancel.classList.add('hidden'); cancel.onclick = null; delete cancel.dataset.armed; return; }
   el.classList.remove('hidden');
   if (text) $('#busy-text').textContent = text;
   const pr = $('#busy-progress');
@@ -161,8 +162,12 @@ function busy(text, progress, { onCancel } = {}) {
 
 function safeFileName(name) {
   // Algunos sistemas no aceptan tildes o símbolos en el nombre de las descargas
-  return name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[ñÑ]/g, (c) => (c === 'ñ' ? 'n' : 'N'))
-    .replace(/[^\w .,()\-]+/g, ' ').replace(/\s+/g, ' ').trim() || 'archivo';
+  const ext = (/\.[a-z0-9]{2,5}$/i.exec(name) || [''])[0];
+  let base = name.slice(0, name.length - ext.length).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[ñÑ]/g, (c) => (c === 'ñ' ? 'n' : 'N'))
+    .replace(/[^\p{L}\p{N} .,()\-]+/gu, ' ').replace(/\s+/g, ' ').trim();
+  if (!base) base = 'en-voz-alta';
+  return base.slice(0, 120) + ext;
 }
 
 function download(name, data, type) {
@@ -175,7 +180,78 @@ function download(name, data, type) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  // Android puede tardar en empezar a guardar archivos grandes: no liberar enseguida
+  setTimeout(() => URL.revokeObjectURL(url), 120000);
+}
+
+/**
+ * Entrega un archivo generado por la app (MP3, respaldo, texto): hoja con
+ * «Guardar en el teléfono» y «Compartir / Abrir con…». Cada botón actúa dentro
+ * del toque del usuario, que es lo que exigen Android y el navegador.
+ */
+function deliverFile(name, data, type, { title = 'Archivo listo', hint = '' } = {}) {
+  name = safeFileName(name);
+  const blob = data instanceof Blob ? data : new Blob([data], { type });
+  const file = new File([blob], name, { type: blob.type || type || 'application/octet-stream' });
+  const body = el(`<div>
+    <div class="file-card"><svg class="ic"><use href="#i-file"/></svg><div class="grow"><div class="t"></div><div class="sub muted small"></div></div></div>
+    <div class="btn-row"><button class="btn primary" id="df-save"><svg class="ic"><use href="#i-download"/></svg> Guardar en el teléfono</button></div>
+    <div class="btn-row"><button class="btn secondary" id="df-share"><svg class="ic"><use href="#i-external"/></svg> Compartir o abrir con…</button></div>
+    <p class="muted small" id="df-hint"></p>
+  </div>`);
+  $('.t', body).textContent = name;
+  $('.sub', body).textContent = fmtSize(blob.size);
+  $('#df-hint', body).textContent = hint || 'Al guardar, el archivo queda en la carpeta «Descargas» del teléfono.';
+  const canShare = !!(navigator.canShare && navigator.canShare({ files: [file] }));
+  if (!canShare) $('#df-share', body).closest('.btn-row').remove();
+  openSheet(title, body);
+  $('#df-save').onclick = () => {
+    try {
+      download(name, blob);
+      $('#df-hint').textContent = 'Descarga iniciada. Revisa la notificación o la carpeta «Descargas». Si no aparece, usa «Compartir o abrir con…».';
+    } catch (e) {
+      showError('No se pudo guardar el archivo', e, 'guardar');
+    }
+  };
+  const share = $('#df-share');
+  if (share) share.onclick = async () => {
+    try {
+      await navigator.share({ files: [file], title: name });
+    } catch (e) {
+      if (e.name !== 'AbortError') showError('No se pudo compartir el archivo', e, 'compartir');
+    }
+  };
+}
+
+/** Error comprensible con opción de copiar el detalle técnico. */
+function showError(title, err, context = 'error') {
+  const entry = logError(context, err);
+  const body = el(`<div>
+    <p style="margin-top:0;line-height:1.5" class="err-msg"></p>
+    <details class="err-details"><summary>Detalle técnico</summary><pre></pre></details>
+    <div class="btn-row"><button class="btn secondary" id="er-copy">Copiar detalle</button><button class="btn primary" id="er-ok">Entendido</button></div>
+  </div>`);
+  $('.err-msg', body).textContent = friendlyError(err);
+  $('pre', body).textContent = `${entry.at}\n[${entry.context}] ${entry.name ? entry.name + ': ' : ''}${entry.message}\n${entry.stack}`;
+  openSheet(title, body);
+  $('#er-ok').onclick = () => closeSheet();
+  $('#er-copy').onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(report({ version: VERSION }));
+      toast('Detalle copiado. Puedes pegarlo en un mensaje.');
+    } catch {
+      toast('No se pudo copiar. Abre Ajustes → Diagnóstico.');
+    }
+  };
+}
+
+function friendlyError(err) {
+  const m = String((err && err.message) || err || '');
+  if (/quota|space|storage|NoModificationAllowed/i.test(m)) return 'No hay suficiente espacio libre en el teléfono. Libera espacio o elimina libros o voces que no uses.';
+  if (/network|failed to fetch|load failed|networkerror/i.test(m)) return 'No hay conexión o el sitio no respondió. Revisa tu internet e inténtalo de nuevo.';
+  if (/abort/i.test(m)) return 'La operación se canceló.';
+  if (/memory|memoria/i.test(m)) return 'El teléfono se quedó sin memoria. Cierra otras apps e inténtalo de nuevo.';
+  return m || 'Ocurrió un error inesperado.';
 }
 
 function el(html) {
@@ -214,14 +290,30 @@ function applyAppearance() {
 
 function showView(name) {
   $$('.view').forEach((v) => v.classList.toggle('active', v.id === 'view-' + name));
+  document.body.classList.toggle('in-reader', name === 'reader');
+  $('#toast').classList.add('hidden');
+  if (name === 'library') updateMini();
 }
 
 let ignorePop = 0;
+let exploreCtl = null;
+let exporting = false;
 window.addEventListener('popstate', () => {
   if (ignorePop > 0) { ignorePop--; return; }
+  if (exporting) {
+    history.pushState({ exporting: true }, '');
+    toast('Espera a que termine la exportación o tócala para cancelar.');
+    return;
+  }
   if (sheetOpen) { closeSheet(true); return; }
   if ($('#view-reader').classList.contains('active')) closeReader(true);
+  else if (exploreCtl && exploreCtl.isExplore()) exploreCtl.showTab('mine', { fromPop: true });
 });
+
+function historyBack() {
+  ignorePop++;
+  history.back();
+}
 
 // =================================================================== hoja inferior
 
@@ -237,11 +329,20 @@ function openSheet(title, body, { onClose } = {}) {
   container.scrollTop = 0;
   $('#sheet').classList.remove('hidden');
   $('#backdrop').classList.remove('hidden');
-  if (!sheetOpen) history.pushState({ sheet: true }, '');
+  if (!sheetOpen) {
+    sheetReturnFocus = document.activeElement;
+    history.pushState({ sheet: true }, '');
+  }
   sheetOpen = true;
   sheetOnClose = onClose || null;
+  requestAnimationFrame(() => $('#sheet').focus({ preventScroll: true }));
   return container;
 }
+
+let sheetReturnFocus = null;
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && sheetOpen) { e.preventDefault(); closeSheet(); }
+});
 
 function closeSheet(fromPop = false) {
   if (!sheetOpen) return;
@@ -251,6 +352,8 @@ function closeSheet(fromPop = false) {
   const cb = sheetOnClose;
   sheetOnClose = null;
   cb && cb();
+  if (sheetReturnFocus && sheetReturnFocus.isConnected) sheetReturnFocus.focus({ preventScroll: true });
+  sheetReturnFocus = null;
   if (!fromPop && history.state && history.state.sheet) { ignorePop++; history.back(); }
 }
 
@@ -291,9 +394,11 @@ function segRow(options, value, onChange) {
     b.type = 'button';
     b.textContent = label;
     b.classList.toggle('on', val === value);
+    b.setAttribute('aria-pressed', String(val === value));
     b.addEventListener('click', () => {
-      $$('button', wrap).forEach((x) => x.classList.remove('on'));
+      $$('button', wrap).forEach((x) => { x.classList.remove('on'); x.setAttribute('aria-pressed', 'false'); });
       b.classList.add('on');
+      b.setAttribute('aria-pressed', 'true');
       onChange(val);
     });
     wrap.appendChild(b);
@@ -315,6 +420,7 @@ async function renderLibrary() {
   let docs = await db.listDocs();
   if (ticket !== libraryRender) return; // hay un render más reciente en curso
   const total = docs.length;
+  renderContinue(docs);
   const q = normalizeSearch($('#lib-search').value.trim());
   if (q) docs = docs.filter((d) => normalizeSearch(`${d.title} ${d.author || ''}`).includes(q));
   const sort = settings.sort;
@@ -327,24 +433,16 @@ async function renderLibrary() {
   const list = $('#lib-list');
   list.innerHTML = '';
   $('#lib-empty').classList.toggle('hidden', total > 0);
+  document.body.classList.toggle('empty-lib', total === 0);
+  $('#lib-section').classList.toggle('hidden', total === 0);
+  $('#lib-tools').classList.toggle('hidden', total < 6 && !q);
+  $('#lib-count').textContent = total === 1 ? '1 libro' : `${total} libros`;
   for (const d of docs) list.appendChild(cardFor(d));
   if (total > 0 && !docs.length) list.appendChild(el('<p class="muted" style="text-align:center">Sin resultados.</p>'));
 }
 
-function cardFor(d) {
-  const pct = Math.round((d.progress?.pct || 0) * 100);
-  const remainingSec = ((d.chars || 0) * (1 - (d.progress?.pct || 0))) / (player.cps * (settings.rate || 1));
-  const card = el(`<div class="card" role="button" tabindex="0">
-    <div class="cover"></div>
-    <div class="card-main">
-      <div class="card-title"></div>
-      <div class="card-author"></div>
-      <div class="bar"><i></i></div>
-      <div class="card-meta"><span class="badge"></span><span class="pct"></span><span class="when"></span></div>
-    </div>
-    <button class="icon-btn more" aria-label="Opciones"><svg class="ic"><use href="#i-more"/></svg></button>
-  </div>`);
-  const cover = $('.cover', card);
+function coverEl(d, cls = 'cover') {
+  const cover = el(`<div class="${cls}"></div>`);
   if (d.cover) {
     const img = document.createElement('img');
     img.src = d.cover;
@@ -355,17 +453,66 @@ function cardFor(d) {
     cover.style.background = hashColor(d.title);
     cover.textContent = initials(d.title);
   }
+  return cover;
+}
+
+function remainingFor(d) {
+  return ((d.chars || 0) * (1 - (d.progress?.pct || 0))) / (player.cps * (settings.rate || 1));
+}
+
+/** Tarjeta «Continuar escuchando» con el último libro empezado. */
+function renderContinue(docs) {
+  const box = $('#continue');
+  const started = docs
+    .filter((d) => d.lastOpenedAt && (d.progress?.pct || 0) < 0.995)
+    .sort((a, b) => b.lastOpenedAt - a.lastOpenedAt);
+  const d = started[0];
+  box.innerHTML = '';
+  box.classList.toggle('hidden', !d);
+  if (!d) return;
+  const pct = Math.round((d.progress?.pct || 0) * 100);
+  const main = el(`<div class="c-main">
+    <span class="c-label">Continuar escuchando</span>
+    <span class="c-title"></span>
+    <span class="c-sub"></span>
+    <div class="bar"><i></i></div>
+    <button class="btn primary" id="continue-play"><svg class="ic"><use href="#i-play"/></svg> Continuar</button>
+  </div>`);
+  $('.c-title', main).textContent = d.title;
+  $('.c-sub', main).textContent = `${pct}% · quedan ${fmtDuration(remainingFor(d))}`;
+  $('.bar i', main).style.width = pct + '%';
+  box.appendChild(coverEl(d));
+  box.appendChild(main);
+  $('#continue-play', main).addEventListener('click', () => openReader(d.id, { play: true }));
+}
+
+function cardFor(d) {
+  const pct = Math.round((d.progress?.pct || 0) * 100);
+  const card = el(`<div class="card">
+    <div class="card-main">
+      <button class="card-title linkish"></button>
+      <div class="card-author"></div>
+      <div class="bar"><i></i></div>
+      <div class="card-meta"><span class="status"></span><span class="when"></span></div>
+    </div>
+    <button class="card-play" aria-label="Escuchar"><svg class="ic"><use href="#i-play"/></svg></button>
+    <div class="card-actions"><button class="icon-btn more" aria-label="Opciones del libro"><svg class="ic"><use href="#i-more"/></svg></button></div>
+  </div>`);
+  card.insertBefore(coverEl(d), card.firstChild);
+  card.dataset.format = d.format || 'txt';
+  card.dataset.id = d.id;
   $('.card-title', card).textContent = d.title;
   $('.card-author', card).textContent = d.author || '';
-  $('.bar i', card).style.width = pct + '%';
-  $('.badge', card).textContent = d.format || 'txt';
-  $('.pct', card).textContent = pct >= 100 ? 'Terminado' : `${pct}% · ${fmtDuration(remainingSec)}`;
-  $('.when', card).textContent = fmtRelative(d.lastOpenedAt);
+  if (!d.author) $('.card-author', card).remove();
+  const bar = $('.bar', card);
+  if (pct <= 0) bar.remove(); else $('i', bar).style.width = pct + '%';
+  $('.status', card).textContent = pct >= 100 ? 'Terminado ✓' : pct <= 0 ? `Sin empezar · ${fmtDuration(remainingFor(d))}` : `${pct}% · quedan ${fmtDuration(remainingFor(d))}`;
+  $('.when', card).textContent = d.lastOpenedAt ? fmtRelative(d.lastOpenedAt) : '';
   card.addEventListener('click', (e) => {
-    if (e.target.closest('.more')) return;
+    if (e.target.closest('.more, .card-play')) return;
     openReader(d.id);
   });
-  card.addEventListener('keydown', (e) => { if (e.key === 'Enter') openReader(d.id); });
+  $('.card-play', card).addEventListener('click', (e) => { e.stopPropagation(); openReader(d.id, { play: true }); });
   $('.more', card).addEventListener('click', (e) => { e.stopPropagation(); openDocMenu(d.id); });
   return card;
 }
@@ -386,7 +533,7 @@ async function openDocMenu(id) {
     <button class="btn secondary" id="dm-export"><svg class="ic"><use href="#i-download"/></svg> Exportar texto</button>
   </div>`));
   body.appendChild(el(`<div class="btn-row"><button class="btn danger" id="dm-delete"><svg class="ic"><use href="#i-trash"/></svg> Eliminar</button></div>`));
-  openSheet('Documento', body);
+  openSheet('Libro', body);
   $('#dm-title').value = d.title;
   $('#dm-author').value = d.author || '';
   const sel = $('#dm-lang');
@@ -408,14 +555,20 @@ async function openDocMenu(id) {
   $('#dm-export').onclick = async () => {
     const c = await db.getContent(id);
     const txt = c.paragraphs.map((p) => p.x).join('\n\n');
-    download(`${d.title}.txt`, txt, 'text/plain;charset=utf-8');
+    deliverFile(`${d.title}.txt`, txt, 'text/plain;charset=utf-8', { title: 'Texto exportado' });
   };
   $('#dm-delete').onclick = async () => {
-    if (!confirm(`¿Eliminar «${d.title}» de la biblioteca?`)) return;
+    const meta = await db.getDoc(id);
+    const cont = await db.getContent(id);
+    if (current && current.meta.id === id) unloadCurrent();
     await db.deleteDocument(id);
     closeSheet();
     renderLibrary();
-    toast('Documento eliminado');
+    toast(`«${d.title}» eliminado`, {
+      action: 'Deshacer',
+      duration: 8000,
+      onAction: async () => { await db.addDocument(meta, cont); renderLibrary(); toast('Libro restaurado'); }
+    });
   };
 }
 
@@ -451,13 +604,13 @@ async function importFiles(files) {
       console.error(e);
       failed++;
       busy(false);
-      alert(`No se pudo leer «${file.name}»:\n${e.message || e}`);
+      showError(`No se pudo leer «${file.name}»`, e, 'importar');
     }
   }
   busy(false);
   await renderLibrary();
   if (imported.length === 1 && !failed) openReader(imported[0].id);
-  else if (imported.length) toast(`${imported.length} documento(s) agregado(s)`);
+  else if (imported.length) toast(imported.length === 1 ? 'Se agregó 1 libro' : `Se agregaron ${imported.length} libros`);
 }
 
 async function saveParsed(res, { fileName = '', size = 0, extra = {} } = {}) {
@@ -517,7 +670,42 @@ document.addEventListener('drop', (e) => {
   if (files.length) importFiles(files);
 });
 
-$('#btn-paste').addEventListener('click', () => {
+function openAddSheet() {
+  const body = el(`<div>
+    <button class="menu-item" id="add-file"><svg class="ic"><use href="#i-file"/></svg><span class="grow">Archivo del teléfono<span class="sub">PDF, EPUB, Word, TXT y más</span></span></button>
+    <button class="menu-item" id="btn-paste"><svg class="ic"><use href="#i-clipboard"/></svg><span class="grow">Pegar texto<span class="sub">Copia un texto de otra app y escúchalo</span></span></button>
+    <button class="menu-item" id="add-explore"><svg class="ic"><use href="#i-compass"/></svg><span class="grow">Libros gratis<span class="sub">Miles de clásicos para descargar</span></span></button>
+  </div>`);
+  openSheet('Agregar un libro', body);
+  $('#add-file').onclick = () => { closeSheet(); $('#file-input').click(); };
+  $('#btn-paste').onclick = () => openPaste();
+  $('#add-explore').onclick = () => { closeSheet(); exploreCtl && exploreCtl.showTab('explore'); };
+}
+
+$('#btn-add').addEventListener('click', openAddSheet);
+$('#empty-file').addEventListener('click', () => $('#file-input').click());
+$('#empty-sample').addEventListener('click', openSample);
+
+/** Texto de ejemplo para probar la app con un toque. */
+async function openSample() {
+  const text = `Cómo usar En Voz Alta
+
+Bienvenido. Este es un texto de ejemplo para que escuches cómo funciona la app. Mientras lo escuchas, la frase que se está leyendo aparece resaltada.
+
+Puedes tocar cualquier frase para saltar a ella. Con los botones de abajo avanzas o retrocedes por frase o por párrafo, y con el botón de velocidad escuchas más rápido o más lento.
+
+Para que la voz suene más natural, toca «Mejorar voz» y descarga una voz natural. Se descarga una sola vez y después funciona sin internet, incluso con la pantalla apagada.
+
+Cuando quieras, vuelve a la biblioteca: la lectura sigue sonando y puedes continuar donde la dejaste.`;
+  const res = parsePlainText(text);
+  res.title = 'Ejemplo: cómo usar En Voz Alta';
+  res.format = 'texto';
+  const meta = await saveParsed(res);
+  await renderLibrary();
+  openReader(meta.id, { play: true });
+}
+
+function openPaste() {
   const body = el(`<div>
     <div class="field"><label for="pt-title">Título</label><input id="pt-title" placeholder="Opcional"></div>
     <div class="field"><label for="pt-text">Texto</label><textarea id="pt-text" placeholder="Pega aquí el texto que quieres escuchar"></textarea></div>
@@ -549,7 +737,7 @@ $('#btn-paste').addEventListener('click', () => {
       toast(e.message);
     }
   };
-});
+}
 
 // =================================================================== lector
 
@@ -560,9 +748,19 @@ let blockLast = -1;
 const reader = $('#reader');
 const content = $('#reader-content');
 
-async function openReader(id) {
+async function openReader(id, { play = false } = {}) {
+  // El mismo libro sigue cargado (por ejemplo, sonando desde el mini reproductor)
+  if (current && current.meta.id === id) {
+    showView('reader');
+    history.pushState({ reader: id }, '');
+    highlightSentence(player.idx, { force: true, instant: true });
+    if (play && !player.playing) player.play();
+    return;
+  }
+  if (player.playing) player.pause();
+  if (current) saveProgress(true);
   const [meta, cont] = await Promise.all([db.getDoc(id), db.getContent(id)]);
-  if (!meta || !cont) return toast('No se encontró el documento');
+  if (!meta || !cont) return toast('No se encontró el libro');
   current = { meta, content: cont };
   meta.lastOpenedAt = Date.now();
   db.updateDoc(id, { lastOpenedAt: meta.lastOpenedAt });
@@ -582,18 +780,56 @@ async function openReader(id) {
   updateProgressUI(player.progressInfo());
   updateSpeedChip();
   media.setMetadata(mediaMetadata());
-  if (settings.autoPlay) player.play();
+  if (play || settings.autoPlay) player.play();
 }
 
+/** Vuelve a la biblioteca; la lectura sigue sonando en el mini reproductor. */
 function closeReader(fromPop = false) {
-  if (player.playing) player.pause();
   saveProgress(true);
-  player.setSleep(null);
-  current = null;
   showView('library');
   renderLibrary();
   if (!fromPop && history.state && history.state.reader) { ignorePop++; history.back(); }
 }
+
+/** Descarga el libro actual del reproductor (al eliminarlo). */
+function unloadCurrent() {
+  player.stop();
+  player.setSleep(null);
+  media.paused();
+  media.clear();
+  current = null;
+  updatePlayButton();
+  updateMini();
+}
+
+function updateMini() {
+  const show = !!current && $('#view-library').classList.contains('active');
+  $('#mini').classList.toggle('hidden', !show);
+  document.body.classList.toggle('has-mini', show);
+  if (!show) return;
+  const m = current.meta;
+  $('#mini-title').textContent = m.title;
+  const info = player.progressInfo();
+  const ch = chapterTitleFor(player.sentences[player.idx]?.p ?? 0);
+  $('#mini-sub').textContent = [ch, `${Math.floor(info.pct * 100)}%`].filter(Boolean).join(' · ');
+  const cv = $('#mini-cover');
+  cv.innerHTML = '';
+  cv.style.background = '';
+  if (m.cover) {
+    const img = document.createElement('img');
+    img.src = m.cover;
+    img.alt = '';
+    cv.appendChild(img);
+  } else {
+    cv.style.background = hashColor(m.title);
+    cv.textContent = initials(m.title);
+  }
+  $('#mini-play use').setAttribute('href', player.playing ? '#i-pause' : '#i-play');
+  $('#mini-play').setAttribute('aria-label', player.playing ? 'Pausar' : 'Reproducir');
+}
+
+$('#mini-open').addEventListener('click', () => current && openReader(current.meta.id));
+$('#mini-play').addEventListener('click', () => { if (current) player.toggle(); });
 
 $('#btn-back').addEventListener('click', () => closeReader());
 
@@ -802,10 +1038,16 @@ function updateProgressUI(info) {
   $('#remaining').textContent = chs
     ? `Capítulo: ${fmtDuration(info.chapterRemaining)} · Total: ${fmtDuration(info.remaining)}`
     : `Quedan ${fmtDuration(info.remaining)}`;
+  $('#seek').setAttribute('aria-valuetext', `${Math.floor(info.pct * 100)}%, quedan ${fmtDuration(info.remaining)}`);
+}
+
+function fmtRate(r) {
+  return `${Number((r || 1).toFixed(2))}×`;
 }
 
 function updateSpeedChip() {
-  $('#btn-speed').textContent = `${(settings.rate || 1).toFixed(2).replace(/0$/, '')}×`;
+  $('#btn-speed').textContent = fmtRate(settings.rate);
+  $('#btn-speed').setAttribute('aria-label', `Velocidad: ${fmtRate(settings.rate)}`);
 }
 
 let seeking = false;
@@ -847,6 +1089,8 @@ $('#btn-next-para').addEventListener('click', () => player.nextParagraph());
 
 player.addEventListener('state', (e) => {
   updatePlayButton();
+  updateMini();
+  if (!e.detail.playing) neural.onstatus && neural.onstatus('idle');
   if (e.detail.playing) media.playing(); else media.paused();
 });
 player.addEventListener('sentence', (e) => {
@@ -860,6 +1104,7 @@ player.addEventListener('finished', () => toast('Fin del documento'));
 player.addEventListener('sleep', () => updateSleepChip());
 player.addEventListener('error', (e) => {
   const err = e.detail.error;
+  logError('voz', new Error(`${err}${e.detail.message ? ': ' + e.detail.message : ''}`));
   const msgs = {
     'not-allowed': 'El navegador bloqueó la voz. Toca ▶ de nuevo.',
     'language-unavailable': 'No hay voz instalada para este idioma. Revisa «Voz».',
@@ -913,6 +1158,7 @@ async function pickVoice() {
   const key = settings.neuralVoices?.[lang];
   const nv = key ? findVoice(key) : null;
   if (nv && neural.supported && (await isRuntimeReady()) && (await isVoiceDownloaded(nv))) {
+    const resume = player.playing && player.engine === neural && neural.voice && neural.voice.key !== nv.key;
     neural.setVoice(nv, settings.neuralSpeakers?.[nv.key] || 0).catch((e) => {
       toast('No se pudo cargar la voz neural: ' + e.message, { duration: 6000 });
       delete settings.neuralVoices[lang];
@@ -920,15 +1166,29 @@ async function pickVoice() {
       pickVoice();
     });
     player.setEngine(neural);
+    if (resume) player.restart();
     media.enabled = false; // el propio audio de la voz activa los controles del sistema
-    $('#voice-label').textContent = '✦ ' + nv.name;
+    $('#btn-voice').classList.remove('accent');
+    $('#btn-voice use').setAttribute('href', '#i-sparkle');
+    $('#voice-label').textContent = nv.name;
+    $('#btn-voice').setAttribute('aria-label', `Voz natural: ${nv.name}`);
     return;
   }
   player.setEngine(engine);
   media.enabled = settings.mediaSession;
   const v = engine.pickVoice(lang, settings.voices[lang]);
   player.setVoice(v);
-  $('#voice-label').textContent = v ? shortVoiceName(v) : 'Voz';
+  setVoiceChip(v ? shortVoiceName(v) : 'Voz', lang);
+}
+
+/** Si se usa la voz del sistema y no se eligió a propósito, invita a mejorarla. */
+function setVoiceChip(name, lang) {
+  const chip = $('#btn-voice');
+  const invite = neural.supported && !(settings.systemChosen || {})[lang] && allVoices().some((v) => v.lang === lang);
+  chip.classList.toggle('accent', invite);
+  $('use', chip).setAttribute('href', invite ? '#i-sparkle' : '#i-voice');
+  $('#voice-label').textContent = invite ? 'Mejorar voz' : name;
+  chip.setAttribute('aria-label', invite ? 'Mejorar la voz: descargar una voz natural' : `Voz: ${name}`);
 }
 
 function shortVoiceName(v) {
@@ -936,7 +1196,11 @@ function shortVoiceName(v) {
 }
 
 engine.onvoiceschanged = () => { if (current && !neuralActive()) pickVoice(); };
-neural.onstatus = (s) => document.body.classList.toggle('synthesizing', s === 'synth');
+neural.onstatus = (s) => {
+  document.body.classList.toggle('synthesizing', s === 'synth');
+  $('#player-status').classList.toggle('hidden', s !== 'synth');
+  $('#remaining').classList.toggle('hidden', s === 'synth');
+};
 neural.onexternalpause = () => { if (player.playing) player.pause(); };
 
 $('#btn-voice').addEventListener('click', () => openVoiceSheet());
@@ -955,7 +1219,7 @@ async function openVoiceSheet({ keepScroll = false, showAll = false } = {}) {
   await engine.loadVoices();
   const lang = current?.meta?.lang || 'es';
   const body = el('<div></div>');
-  const langField = el('<div class="field"><label>Idioma del documento</label><select></select></div>');
+  const langField = el('<details class="fold"><summary>Idioma del texto</summary><div class="field"><label>Elige el idioma en que está escrito el libro para usar la voz correcta.</label><select></select></div></details>');
   const sel = $('select', langField);
   for (const [code, name] of Object.entries(LANGS)) sel.appendChild(new Option(name, code));
   sel.value = lang;
@@ -967,22 +1231,35 @@ async function openVoiceSheet({ keepScroll = false, showAll = false } = {}) {
     await pickVoice();
     openVoiceSheet();
   });
-  body.appendChild(langField);
 
   // ---------------------------------------------------------------- neuronales
-  body.appendChild(sectionTitle('✦ Voces neuronales · alta calidad'));
   if (!neural.supported) {
+    body.appendChild(sectionTitle('Voces naturales'));
     body.appendChild(el('<div class="note">Este navegador no permite voces neuronales. Usa Chrome actualizado.</div>'));
   } else {
     const runtimeReady = await isRuntimeReady();
     const downloaded = await downloadedKeys();
     const activeKey = neuralActive() ? neural.voice?.key : null;
-    const intro = el('<p class="muted small" style="margin:0 0 6px"></p>');
-    intro.textContent = `Suenan como una persona y funcionan sin internet. Se descargan una sola vez${runtimeReady ? '' : ` (motor de voz ${fmtSize(RUNTIME_SIZE)} + la voz)`}; conviene usar Wi-Fi.`;
-    body.appendChild(intro);
     const list = allVoices().filter((v) => showAll || v.lang === lang);
-    if (!list.length) body.appendChild(el('<p class="muted small">No hay voces neuronales para este idioma.</p>'));
-    for (const v of list) body.appendChild(neuralRow(v, { downloaded: downloaded.has(v.key), active: v.key === activeKey, lang }));
+    const hasForLang = list.some((v) => v.lang === lang && downloaded.has(v.key));
+    const reco = list.find((v) => v.lang === lang && v.recommended) || list.find((v) => v.lang === lang);
+    if (reco && !hasForLang && !(downloading && downloading.key === reco.key)) {
+      const total = reco.size + (runtimeReady ? 0 : RUNTIME_SIZE);
+      const card = el(`<div class="reco">
+        <div class="r-kicker">✦ Voz natural recomendada</div>
+        <div class="r-title"></div>
+        <div class="r-sub"></div>
+        <div class="btn-row"><button class="btn primary" id="reco-dl"><svg class="ic"><use href="#i-download"/></svg> Descargar</button><button class="btn secondary" id="reco-sample">Escuchar muestra</button></div>
+      </div>`);
+      $('.r-title', card).textContent = `${reco.region} · ${qualityLabel(reco.quality)}`;
+      $('.r-sub', card).textContent = `Suena como una persona y funciona sin internet, también con la pantalla apagada. Descarga única de ${fmtSize(total)}; mejor con Wi-Fi.`;
+      $('#reco-dl', card).onclick = () => startDownload(reco, lang);
+      $('#reco-sample', card).onclick = () => playSample(reco);
+      body.appendChild(card);
+    }
+    body.appendChild(sectionTitle(hasForLang ? '✦ Voces naturales' : 'Otras voces naturales'));
+    if (!list.length) body.appendChild(el('<p class="muted small">No hay voces naturales para este idioma.</p>'));
+    for (const v of list) body.appendChild(neuralRow(v, { downloaded: downloaded.has(v.key), active: v.key === activeKey, lang, runtimeReady }));
     const tools = el(`<div class="btn-row">
       <button class="btn small secondary" id="nv-all"></button>
       <button class="btn small secondary" id="nv-import"><svg class="ic"><use href="#i-upload"/></svg> Agregar desde archivos</button></div>`);
@@ -1003,14 +1280,15 @@ async function openVoiceSheet({ keepScroll = false, showAll = false } = {}) {
   }
 
   // ---------------------------------------------------------------- sistema
-  body.appendChild(sectionTitle('Voces del sistema'));
+  const sysFold = el('<details class="fold"><summary></summary><div class="fold-body"></div></details>');
+  const sysBody = $('.fold-body', sysFold);
   let voices = engine.voicesFor(lang);
   if (!voices.length) {
-    body.appendChild(el('<div class="note">No se encontraron voces del sistema para este idioma. Se muestran todas las disponibles.</div>'));
+    sysBody.appendChild(el('<div class="note">No se encontraron voces del sistema para este idioma. Se muestran todas las disponibles.</div>'));
     voices = engine.voices.slice();
   }
   if (!engine.supported || !engine.voices.length) {
-    body.appendChild(el('<div class="note">Este navegador no ofrece voces del sistema. En Android usa <b>Chrome</b>; en iPhone/iPad usa <b>Safari</b>.</div>'));
+    sysBody.appendChild(el('<div class="note">Este navegador no ofrece voces del sistema. En Android usa <b>Chrome</b>; en iPhone/iPad usa <b>Safari</b>.</div>'));
   }
   voices.sort((a, b) => (b.localService - a.localService) || a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name));
   const curURI = neuralActive() ? null : player.voice?.voiceURI;
@@ -1030,23 +1308,32 @@ async function openVoiceSheet({ keepScroll = false, showAll = false } = {}) {
     row.addEventListener('click', async (e) => {
       if (e.target.closest('button')) return;
       settings.voices[lang] = v.voiceURI;
+      settings.systemChosen = { ...(settings.systemChosen || {}), [lang]: true };
       if (settings.neuralVoices) delete settings.neuralVoices[lang];
       saveSettings();
       await pickVoice();
       player.setVoice(v);
-      $('#voice-label').textContent = shortVoiceName(v);
       openVoiceSheet({ keepScroll: true, showAll });
     });
     $('button', row).addEventListener('click', () => testSystemVoice(v));
-    body.appendChild(row);
+    sysBody.appendChild(row);
   }
-  body.appendChild(sectionTitle('Ayuda'));
-  body.appendChild(el(voiceHelpHtml()));
+  $('summary', sysFold).textContent = `Voces del sistema del teléfono (${voices.length})`;
+  if (!neuralActive() && (settings.systemChosen || {})[lang]) sysFold.open = true;
+  body.appendChild(sysFold);
+  body.appendChild(langField);
+  const help = el('<details class="fold"><summary>Ayuda sobre las voces</summary></details>');
+  help.appendChild(el(voiceHelpHtml()));
+  body.appendChild(help);
   openSheet('Voz', body);
   if (prevScroll) $('#sheet-body').scrollTop = prevScroll;
 }
 
-function neuralRow(v, { downloaded, active, lang }) {
+function qualityLabel(q) {
+  return { Alta: 'Alta calidad', Media: 'Buena calidad', 'Rápida': 'Liviana y rápida' }[q] || q || 'Natural';
+}
+
+function neuralRow(v, { downloaded, active, lang, runtimeReady = true }) {
   const row = el(`<div class="list-item nv-row">
     <span class="radio"></span>
     <div class="grow"><div class="t"></div><div class="sub"></div><div class="nv-progress hidden"><progress max="1" value="0"></progress><span></span></div></div>
@@ -1055,16 +1342,16 @@ function neuralRow(v, { downloaded, active, lang }) {
   radio.classList.toggle('on', active);
   radio.classList.toggle('disabled', !downloaded);
   const t = $('.t', row);
-  t.textContent = `${v.name}${v.region ? ' · ' + v.region : ''} `;
+  t.textContent = `${v.region || v.name} `;
   const q = el('<span class="voice-badge local"></span>');
-  q.textContent = v.quality || 'Neural';
+  q.textContent = qualityLabel(v.quality);
   t.appendChild(q);
   if (v.recommended) {
     const r = el('<span class="voice-badge rec">Recomendada</span>');
     t.appendChild(document.createTextNode(' '));
     t.appendChild(r);
   }
-  $('.sub', row).textContent = [v.note, downloaded ? 'Descargada' : fmtSize(v.size)].filter(Boolean).join(' · ');
+  $('.sub', row).textContent = [`Voz «${v.name}»`, v.note, downloaded ? 'Descargada ✓' : runtimeReady ? fmtSize(v.size) : `${fmtSize(v.size + RUNTIME_SIZE)} con el motor`].filter(Boolean).join(' · ');
   const actions = $('.nv-actions', row);
   const btn = (label, cls, fn, aria) => {
     const b = document.createElement('button');
@@ -1086,7 +1373,7 @@ function neuralRow(v, { downloaded, active, lang }) {
     btn('<svg class="ic"><use href="#i-trash"/></svg>', 'secondary icon-only', () => removeNeural(v, lang), 'Eliminar voz');
     row.addEventListener('click', () => selectNeural(v, lang));
   } else {
-    if (v.sampleUrl) btn('Muestra', 'secondary', () => playSample(v));
+    if (v.sampleUrl) btn('Probar', 'secondary', () => playSample(v));
     btn('<svg class="ic"><use href="#i-download"/></svg> Descargar', 'primary', () => startDownload(v, lang));
   }
   if (downloaded && active && v.speakers > 1) {
@@ -1125,7 +1412,7 @@ async function startDownload(v, lang) {
     toast(`Voz «${v.name}» lista. Ya funciona sin conexión.`, { duration: 5000 });
   } catch (e) {
     downloading = null;
-    if (e.name !== 'AbortError') alert(`No se pudo descargar la voz: ${e.message}\n\nRevisa tu conexión a internet y el espacio libre.`);
+    if (e.name !== 'AbortError') showError('No se pudo descargar la voz', e, 'descargar voz');
     if (sheetOpen && $('#sheet-title').textContent === 'Voz') openVoiceSheet({ keepScroll: true });
   }
 }
@@ -1187,7 +1474,7 @@ $('#voice-input').addEventListener('change', async (e) => {
     toast(`Voz «${v.name}» agregada`);
   } catch (err) {
     busy(false);
-    alert('No se pudo agregar la voz: ' + err.message);
+    showError('No se pudo agregar la voz', err, 'importar voz');
   }
 });
 
@@ -1215,7 +1502,7 @@ function exportRange(scope) {
 
 function exportSection() {
   const wrap = el('<div></div>');
-  wrap.appendChild(sectionTitle('Exportar audio MP3'));
+  if (sheetOpen && $('#sheet-title').textContent !== 'Exportar audio MP3') wrap.appendChild(sectionTitle('Exportar audio MP3'));
   const ch = exportRange('chapter');
   const bk = exportRange('book');
   const dur = (r) => fmtDuration(player.secondsBetween(r.from, r.to) * (settings.rate || 1));
@@ -1241,28 +1528,36 @@ async function exportAudio(scope) {
   if (!neuralActive() || !current) return;
   if (player.playing) player.pause();
   const r = exportRange(scope);
-  const ctrl = { cancelled: false };
+  // El nombre se calcula antes: la exportación puede tardar minutos
+  const name = `${current.meta.title}${r.label ? ' - ' + r.label : ''}.mp3`;
+  const ctrl = new AbortController();
+  const onCancel = () => ctrl.abort();
   closeSheet();
+  exporting = true;
+  media.exporting = true;
   media.requestWake();
-  busy('Preparando la exportación…', 0, { onCancel: () => { ctrl.cancelled = true; } });
+  busy('Preparando la exportación…', 0, { onCancel });
   try {
     const blob = await exportMp3({
       engine: neural,
       player,
       from: r.from,
       to: r.to,
-      signal: ctrl,
-      onProgress: (f, eta) => busy(`Exportando audio… ${Math.floor(f * 100)}%${eta ? `\nQuedan ≈ ${fmtDuration(eta)}` : ''}`, f, { onCancel: () => { ctrl.cancelled = true; } })
+      signal: ctrl.signal,
+      onProgress: (f, eta) => busy(`Exportando audio… ${Math.floor(f * 100)}%${eta ? `\nQuedan ≈ ${fmtDuration(eta)}` : ''}\nMantén la app abierta.`, f, { onCancel })
     });
     busy(false);
-    const name = `${current.meta.title}${r.label ? ' - ' + r.label : ''}.mp3`.replace(/[\\/:*?"<>|]+/g, ' ');
-    download(name, blob);
-    toast(`Audio exportado: ${fmtSize(blob.size)}`, { duration: 5000 });
+    deliverFile(name, blob, 'audio/mpeg', {
+      title: 'Audio listo',
+      hint: 'Al guardar, el MP3 queda en la carpeta «Descargas». Con «Compartir» puedes abrirlo en tu reproductor de música o enviarlo.'
+    });
   } catch (e) {
     busy(false);
-    if (e.name !== 'AbortError') alert('No se pudo exportar el audio: ' + e.message);
+    if (e.name !== 'AbortError') showError('No se pudo exportar el audio', e, 'exportar mp3');
     else toast('Exportación cancelada');
   } finally {
+    exporting = false;
+    media.exporting = false;
     if (!settings.keepScreenOn) media.releaseWake();
   }
 }
@@ -1289,7 +1584,7 @@ $('#btn-speed').addEventListener('click', () => {
   const big = el('<div class="big-value"></div>');
   const wpm = el('<p class="muted small" style="text-align:center;margin:0 0 8px"></p>');
   const refresh = () => {
-    big.textContent = `${settings.rate.toFixed(2)}×`;
+    big.textContent = fmtRate(settings.rate);
     wpm.textContent = `≈ ${Math.round((player.cps * settings.rate * 60) / 6)} palabras por minuto`;
     updateSpeedChip();
   };
@@ -1327,7 +1622,9 @@ $('#btn-speed').addEventListener('click', () => {
 
 // =================================================================== temporizador de sueño
 
-$('#btn-sleep').addEventListener('click', () => {
+$('#btn-sleep').addEventListener('click', () => openSleep());
+
+function openSleep() {
   const body = el('<div></div>');
   const s = player.sleep;
   if (s) {
@@ -1350,8 +1647,8 @@ $('#btn-sleep').addEventListener('click', () => {
     $('button', off).onclick = () => { player.setSleep(null); closeSheet(); };
     body.appendChild(off);
   }
-  openSheet('Temporizador de sueño', body);
-});
+  openSheet('Temporizador para dormir', body);
+}
 
 function fmtClock(ms) {
   const t = Math.max(0, Math.round(ms / 1000));
@@ -1363,7 +1660,8 @@ function updateSleepChip() {
   const chip = $('#btn-sleep');
   chip.classList.toggle('active', !!s);
   clearInterval(sleepInterval);
-  if (!s) { $('#sleep-label').textContent = 'Dormir'; return; }
+  if (!s) { $('#sleep-label').textContent = ''; chip.setAttribute('aria-label', 'Temporizador para dormir'); return; }
+  chip.setAttribute('aria-label', 'Temporizador para dormir activo');
   if (s.type === 'chapter') { $('#sleep-label').textContent = 'Fin cap.'; return; }
   const tick = () => {
     const left = s.until - Date.now();
@@ -1423,12 +1721,51 @@ function jumpToParagraph(p) {
   highlightSentence(i, { force: true, instant: true });
 }
 
-$('#btn-toc').addEventListener('click', openToc);
 $('#r-heading').addEventListener('click', openToc);
+
+/** Menú ⋮ del lector. */
+function openReaderMenu() {
+  const items = [
+    ['mi-toc', 'i-list', 'Índice', 'Capítulos y páginas', openToc],
+    ['mi-search', 'i-search', 'Buscar en el texto', 'Encuentra una palabra o frase', openSearch],
+    ['mi-bookmarks', 'i-bookmark', 'Marcadores', 'Tus marcas y notas', openBookmarks],
+    ['mi-export', 'i-headphones', 'Exportar audio MP3', 'Escúchalo en cualquier reproductor', openExport],
+    ['mi-sleep', 'i-moon', 'Temporizador para dormir', 'Detener la lectura más tarde', openSleep],
+    ['mi-info', 'i-file', 'Datos del libro', 'Título, autor, idioma, eliminar', () => current && openDocMenu(current.meta.id)]
+  ];
+  const body = el('<div></div>');
+  for (const [id, icon, label, sub, fn] of items) {
+    const b = el(`<button class="menu-item" id="${id}"><svg class="ic"><use href="#${icon}"/></svg><span class="grow"></span></button>`);
+    $('.grow', b).textContent = label;
+    const sm = el('<span class="sub"></span>');
+    sm.textContent = sub;
+    $('.grow', b).appendChild(sm);
+    b.addEventListener('click', fn);
+    body.appendChild(b);
+  }
+  openSheet('Opciones', body);
+}
+
+$('#btn-more').addEventListener('click', openReaderMenu);
+
+/** Exportar audio: requiere una voz neural. */
+function openExport() {
+  if (!current) return;
+  if (player.engine !== neural) {
+    const body = el(`<div>
+      <p style="margin-top:0;line-height:1.5">Para crear un archivo de audio MP3 necesitas una <b>voz natural ✦</b>. Las voces del sistema del teléfono no permiten grabar el audio.</p>
+      <div class="btn-row"><button class="btn primary" id="ex-pick-voice"><svg class="ic"><use href="#i-sparkle"/></svg> Elegir una voz natural</button></div>
+    </div>`);
+    openSheet('Exportar audio MP3', body);
+    $('#ex-pick-voice').onclick = () => openVoiceSheet();
+    return;
+  }
+  openSheet('Exportar audio MP3', exportSection());
+}
 
 // =================================================================== búsqueda
 
-$('#btn-search').addEventListener('click', () => {
+function openSearch() {
   const body = el(`<div><div class="field"><input type="search" placeholder="Buscar palabra o frase" enterkeyhint="search"></div><div class="results"></div></div>`);
   const input = $('input', body);
   const results = $('.results', body);
@@ -1471,11 +1808,10 @@ $('#btn-search').addEventListener('click', () => {
   input.addEventListener('input', () => { clearTimeout(t); t = setTimeout(run, 250); });
   openSheet('Buscar en el texto', body);
   setTimeout(() => input.focus(), 100);
-});
+}
 
 // =================================================================== marcadores
 
-$('#btn-bookmarks').addEventListener('click', openBookmarks);
 $('#btn-add-bm').addEventListener('click', () => addBookmark(''));
 
 async function addBookmark(note) {
@@ -1530,7 +1866,7 @@ function openBookmarks() {
     const exp = el('<div class="btn-row"><button class="btn secondary"><svg class="ic"><use href="#i-download"/></svg> Exportar marcadores</button></div>');
     $('button', exp).onclick = () => {
       const txt = `${meta.title}\n${meta.author || ''}\n\n` + list.map((b) => `• ${b.note ? b.note + ': ' : ''}«${b.excerpt}» (${chapterTitleFor(b.p) || 'pág. ' + (current.content.paragraphs[b.p]?.pg || '')})`).join('\n');
-      download(`Marcadores - ${meta.title}.txt`, txt, 'text/plain;charset=utf-8');
+      deliverFile(`Marcadores - ${meta.title}.txt`, txt, 'text/plain;charset=utf-8', { title: 'Marcadores exportados' });
     };
     body.appendChild(exp);
   }
@@ -1568,6 +1904,9 @@ $('#btn-settings').addEventListener('click', openSettings);
 
 async function openSettings() {
   const body = el('<div></div>');
+  body.appendChild(sectionTitle('Apariencia'));
+  body.appendChild(segRow([['auto', 'Automático'], ['light', 'Claro'], ['sepia', 'Sepia'], ['dark', 'Oscuro'], ['black', 'Negro']], settings.theme, (v) => { settings.theme = v; applyAppearance(); saveSettings(); }));
+  body.appendChild(el('<p class="muted small">El tamaño y tipo de letra se cambian dentro del libro, con el botón «Aa».</p>'));
   body.appendChild(sectionTitle('Pausas y puntuación'));
   body.appendChild(rangeRow('Entre párrafos', { min: 0, max: 2000, step: 50, value: settings.paraPause, format: (v) => `${(v / 1000).toFixed(2)} s`, onInput: (v) => { settings.paraPause = v; saveSettings(); } }));
   body.appendChild(rangeRow('En títulos', { min: 0, max: 3000, step: 50, value: settings.headingPause, format: (v) => `${(v / 1000).toFixed(2)} s`, onInput: (v) => { settings.headingPause = v; saveSettings(); } }));
@@ -1588,11 +1927,6 @@ async function openSettings() {
   body.appendChild(switchRow('Mantener la pantalla encendida', 'Mientras se lee en voz alta.', settings.keepScreenOn, (v) => { settings.keepScreenOn = v; applyAppearance(); saveSettings(); }));
   body.appendChild(switchRow('Leer al abrir un documento', 'Empieza automáticamente donde te quedaste.', settings.autoPlay, (v) => { settings.autoPlay = v; saveSettings(); }));
 
-  body.appendChild(sectionTitle('Explorar: descargas'));
-  const proxyField = el(`<div class="field"><label for="st-proxy">Servidor de descarga (opcional)</label>
-    <input id="st-proxy" type="url" inputmode="url" placeholder="https://mi-proxy.workers.dev" autocomplete="off"></div>`);
-  body.appendChild(proxyField);
-  body.appendChild(el('<p class="muted small" style="margin-top:0">Project Gutenberg no deja que otras apps descarguen sus libros. Sin servidor, «Agregar a mi biblioteca» los baja con el navegador y luego los agregas con «Agregar archivo». Con un servidor gratuito propio (Cloudflare Workers, ver README del proyecto) se descargan con un toque.</p>'));
   body.appendChild(sectionTitle('Importación'));
   body.appendChild(switchRow('Limpiar PDF', 'Quita encabezados, pies y números de página repetidos y une las líneas cortadas.', settings.pdfCleanup, (v) => { settings.pdfCleanup = v; saveSettings(); }));
 
@@ -1613,6 +1947,19 @@ async function openSettings() {
   const wipe = el('<div class="btn-row"><button class="btn danger">Borrar todos los datos</button></div>');
   body.appendChild(wipe);
 
+  body.appendChild(sectionTitle('Avanzado'));
+  const proxyField = el(`<div class="field"><label for="st-proxy">Servidor de descarga (opcional)</label>
+    <input id="st-proxy" type="url" inputmode="url" placeholder="https://mi-proxy.workers.dev" autocomplete="off"></div>`);
+  body.appendChild(proxyField);
+  body.appendChild(el('<p class="muted small" style="margin-top:0">Los libros marcados ⚡ Directo ya se descargan con un toque. Para el resto del catálogo de Gutenberg puedes configurar un servidor gratuito propio (Cloudflare Workers, ver el README del proyecto); sin él, se descargan en dos pasos con el navegador.</p>'));
+  body.appendChild(sectionTitle('Diagnóstico'));
+  const nErr = getLog().length;
+  const diag = el(`<div><p class="muted small" style="margin-top:0"></p>
+    <div class="btn-row"><button class="btn secondary" id="st-report">Copiar informe</button><button class="btn secondary" id="st-clearlog">Borrar registro</button></div></div>`);
+  $('p', diag).textContent = nErr
+    ? `Hay ${nErr === 1 ? '1 error registrado' : `${nErr} errores registrados`} en este teléfono. Si algo falla, copia el informe y envíalo para revisarlo.`
+    : 'No hay errores registrados. Si algo falla, aquí podrás copiar un informe para revisarlo.';
+  body.appendChild(diag);
   body.appendChild(sectionTitle('Ayuda'));
   body.appendChild(el(voiceHelpHtml()));
   body.appendChild(el(`<div class="note"><b>Instalar la app</b><br>
@@ -1637,6 +1984,17 @@ async function openSettings() {
     toast(v ? 'Servidor de descarga guardado' : 'Servidor de descarga desactivado');
   });
   $('#st-export').onclick = exportBackup;
+  $('#st-report').onclick = async () => {
+    const extra = { version: VERSION, motor: player.engine === neural ? `neural ${neural.voice?.key || ''}` : 'sistema', voces: engine.voices.length };
+    const text = report(extra);
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('Informe copiado. Pégalo en un mensaje para enviarlo.');
+    } catch {
+      deliverFile('informe-en-voz-alta.txt', text, 'text/plain;charset=utf-8', { title: 'Informe de diagnóstico' });
+    }
+  };
+  $('#st-clearlog').onclick = () => { clearLog(); toast('Registro borrado'); openSettings(); };
   $('#st-import').onclick = () => $('#backup-input').click();
   $('button', wipe).onclick = async () => {
     if (!confirm('¿Borrar toda la biblioteca, el progreso y los ajustes? Esta acción no se puede deshacer.')) return;
@@ -1720,7 +2078,10 @@ async function exportBackup() {
     for (const d of docs) contents.push(await db.getContent(d.id));
     const data = { app: 'en-voz-alta', version: 1, exportedAt: new Date().toISOString(), settings, docs, contents };
     const date = new Date().toISOString().slice(0, 10);
-    download(`en-voz-alta-respaldo-${date}.json`, JSON.stringify(data), 'application/json');
+    deliverFile(`en-voz-alta-respaldo-${date}.json`, JSON.stringify(data), 'application/json', {
+      title: 'Respaldo listo',
+      hint: 'Guárdalo en «Descargas» o envíalo a tu correo o Drive. Para restaurarlo: Ajustes → Importar respaldo.'
+    });
   } finally {
     busy(false);
   }
@@ -1752,7 +2113,7 @@ $('#backup-input').addEventListener('change', async (e) => {
     await renderLibrary();
     toast(`${n} documento(s) restaurado(s)`);
   } catch (err) {
-    alert('No se pudo importar el respaldo: ' + err.message);
+    showError('No se pudo importar el respaldo', err, 'respaldo');
   } finally {
     busy(false);
   }
@@ -1830,6 +2191,7 @@ async function handleShared() {
 // =================================================================== inicio
 
 async function init() {
+  installGlobalHandlers();
   try {
     const saved = await db.get('settings');
     if (saved) settings = { ...DEFAULTS, ...saved, voices: { ...(saved.voices || {}) } };
@@ -1839,8 +2201,8 @@ async function init() {
   player.configure(settings);
   history.replaceState({ root: true }, '');
   await renderLibrary();
-  initExplore({
-    toast, busy, openReader, renderLibrary, importDownloaded, hashColor, initials, fmtSize, openSheet, closeSheet,
+  exploreCtl = initExplore({
+    toast, busy, openReader, renderLibrary, importDownloaded, hashColor, initials, fmtSize, openSheet, closeSheet, showError, historyBack,
     listDocs: () => db.listDocs(),
     getProxy: () => (settings.downloadProxy || '').trim()
   });

@@ -15,8 +15,10 @@ const pw = await import(process.env.PLAYWRIGHT_PATH ? pathToFileURL(process.env.
 const { chromium } = pw.default || pw;
 
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png', '.wasm': 'application/wasm' };
+const served = [];
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
+  served.push(u.pathname);
   let p = path.join(ROOT, decodeURIComponent(u.pathname));
   if (p.endsWith('/')) p += 'index.html';
   if (!p.startsWith(ROOT) || !fs.existsSync(p)) { res.writeHead(404); res.end(); return; }
@@ -148,7 +150,7 @@ async function readerText() {
 }
 
 console.log('PDF: limpieza de encabezados, números de página y guiones');
-await openCard('.card:has(.badge:text-is("pdf"))');
+await openCard('.card[data-format="pdf"]');
 let txt = await readerText();
 check(!/Encabezado/.test(txt), 'sin encabezado repetido');
 check(/párrafo número 1 del libro/.test(txt), 'contiene el texto del cuerpo');
@@ -181,6 +183,14 @@ check((await page.textContent('#btn-speed')).startsWith('1.5'), 'chip de velocid
 await page.click('#btn-play');
 await page.waitForFunction(() => window.__spoken.some((s) => s.rate === 1.5), null, { timeout: 5000 }).catch(() => {});
 check(await page.evaluate(() => window.__spoken.some((s) => s.rate === 1.5)), 'utterances con rate 1.5');
+// Volver a la biblioteca sin detener la lectura: mini reproductor y «Continuar escuchando»
+await page.click('#btn-back');
+await page.waitForSelector('#mini:not(.hidden)');
+check(await page.evaluate(() => window.__evz.player.playing), 'la lectura sigue al volver a la biblioteca');
+check((await page.textContent('#mini-title')) === 'prueba' && await page.isVisible('#continue-play'), 'mini reproductor y «Continuar escuchando»');
+await page.screenshot({ path: path.join(OUT, '12-mini-reproductor.png') });
+await page.click('#mini-open');
+await page.waitForSelector('#view-reader.active');
 await page.click('#btn-play');
 
 console.log('Navegación por frases y párrafos');
@@ -199,26 +209,28 @@ await page.click('#btn-back');
 await page.waitForSelector('#view-library.active');
 await page.reload();
 await page.waitForSelector('#lib-list .card');
-await openCard('.card:has(.badge:text-is("pdf"))');
+await openCard('.card[data-format="pdf"]');
 const after = await page.evaluate(() => window.__evz.player.idx);
 check(after === before, `posición restaurada tras recargar (${before} → ${after})`);
 check(await page.$(`#reader-content .s.current[data-i="${after}"]`) !== null, 'resaltado en la posición restaurada');
 
 console.log('Marcadores, índice y búsqueda');
-await page.click('#btn-bookmarks');
+await page.click('#btn-more');
+await page.click('#mi-bookmarks');
 await page.fill('.sheet input', 'nota de prueba');
 await page.click('.sheet .btn.primary');
 await page.waitForSelector('.sheet .list-item .t');
 check((await page.textContent('.sheet .list-item .t')).includes('nota de prueba'), 'marcador agregado');
 await page.click('#sheet-close');
-await page.click('#btn-search');
+await page.click('#btn-more');
+await page.click('#mi-search');
 await page.fill('.sheet input[type=search]', 'numero 20');
 await page.waitForSelector('.sheet .result', { timeout: 3000 }).catch(() => {});
 check((await page.$$('.sheet .result')).length >= 1, 'búsqueda sin tildes encuentra «número 20»');
 await page.click('.sheet .result');
 await page.waitForTimeout(200);
 check(/número 20/.test(await page.evaluate(() => window.__evz.player.sentenceText(window.__evz.player.idx))), 'salto al resultado');
-await page.click('#btn-toc');
+await page.click('#r-heading');
 check((await page.$$('.sheet .list-item')).length >= 2, 'índice con capítulos');
 await page.screenshot({ path: path.join(OUT, '05-indice.png') });
 await page.click('#sheet-close');
@@ -235,7 +247,7 @@ check(!(await page.evaluate(() => window.__evz.player.playing)) && stopP === ch2
 
 console.log('EPUB: texto hablado y notas');
 await page.click('#btn-back');
-await openCard('.card:has(.badge:text-is("epub"))');
+await openCard('.card[data-format="epub"]');
 await page.evaluate(() => window.__spoken.length = 0);
 await page.evaluate(() => window.__evz.player.seek(0));
 await page.click('#btn-play');
@@ -262,13 +274,13 @@ await page.screenshot({ path: path.join(OUT, '06-oscuro.png') });
 console.log('Otros formatos');
 await page.click('#btn-back');
 const cases = [
-  ['docx', '.card:has(.badge:text-is("docx"))', /dos partes/],
+  ['docx', '.card[data-format="docx"]', /dos partes/],
   ['txt latin1', '.card:has(.card-title:text-is("latin1"))', /Canción de añoranza/],
-  ['txt', '.card:has(.badge:text-is("txt")):has(.card-title:text-is("prueba"))', /palabra cortada/],
-  ['md', '.card:has(.badge:text-is("md"))', /Un párrafo con negrita y un enlace\./],
-  ['fb2', '.card:has(.badge:text-is("fb2"))', /Capítulo 1/],
-  ['html', '.card:has(.badge:text-is("html"))', /Segundo párrafo/],
-  ['odt', '.card:has(.badge:text-is("odt"))', /Con nota al final/]
+  ['txt', '.card[data-format="txt"]:has(.card-title:text-is("prueba"))', /palabra cortada/],
+  ['md', '.card[data-format="md"]', /Un párrafo con negrita y un enlace\./],
+  ['fb2', '.card[data-format="fb2"]', /Capítulo 1/],
+  ['html', '.card[data-format="html"]', /Segundo párrafo/],
+  ['odt', '.card[data-format="odt"]', /Con nota al final/]
 ];
 for (const [name, sel, re] of cases) {
   if (!(await page.waitForSelector(sel, { timeout: 3000 }).catch(() => null))) { check(false, `${name} presente`); continue; }
@@ -282,6 +294,7 @@ for (const [name, sel, re] of cases) {
 }
 
 console.log('Voz, ajustes, diccionario, pegar texto y respaldo');
+await page.click('#btn-add');
 await page.click('#btn-paste');
 await page.fill('#pt-title', 'Texto pegado');
 await page.fill('#pt-text', 'Hermione leyó el libro. Fue genial.');
@@ -312,7 +325,9 @@ check(await page.evaluate(() => window.__spoken[0].text.startsWith('Hermáioni')
 check((await page.textContent('#reader-content')).includes('Hermione'), 'el texto mostrado no cambia');
 await page.click('#btn-back');
 await page.click('#btn-settings');
-const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#st-export')]);
+await page.click('#st-export');
+await page.waitForSelector('.sheet #df-save');
+const [dl] = await Promise.all([page.waitForEvent('download'), page.click('.sheet #df-save')]);
 const backup = JSON.parse(fs.readFileSync(await dl.path(), 'utf8'));
 check(backup.app === 'en-voz-alta' && backup.docs.length === files.length + 1 && backup.contents.length === backup.docs.length, 'respaldo exportado con todos los documentos');
 await page.click('#sheet-close');
@@ -353,8 +368,15 @@ await context.route('https://www.gutenberg.org/**', (route) => {
   if (url.endsWith('.jpg')) return route.fulfill({ status: 200, headers: { ...CORS, 'Content-Type': 'image/png' }, body: fs.readFileSync(path.join(ROOT, 'icons', 'icon-192.png')) });
   route.fulfill({ status: 200, headers: { ...CORS, 'Content-Type': 'application/epub+zip' }, body: fs.readFileSync(path.join(FIX, 'prueba.epub')) });
 });
+// Libros copiados junto a la app (descarga directa ⚡): se simulan en el servidor de prueba
+const LIBROS = path.join(ROOT, 'libros');
+const librosIndex = fs.readFileSync(path.join(LIBROS, 'index.json'));
+fs.writeFileSync(path.join(LIBROS, 'index.json'), JSON.stringify({ books: [2000], covers: [] }));
+fs.copyFileSync(path.join(FIX, 'prueba.epub'), path.join(LIBROS, 'pg2000.epub'));
+process.on('exit', () => { fs.writeFileSync(path.join(LIBROS, 'index.json'), librosIndex); fs.rmSync(path.join(LIBROS, 'pg2000.epub'), { force: true }); });
 await page.click('#tab-explore');
 await page.waitForSelector('#ex-list .ex-card');
+check((await page.textContent('#ex-list .ex-card:has-text("Don Quijote")')).includes('Directo'), 'los libros copiados se marcan «⚡ Directo»');
 check((await page.$$('#ex-list .ex-card')).length === 2, 'muestra resultados del catálogo');
 check(gutQueries[0].languages === 'es' && gutQueries[0].sort === 'popular', 'filtra por español y ordena por popularidad');
 check((await page.textContent('#ex-list .ex-card .card-author')).includes('Miguel de Cervantes Saavedra (1547–1616)'), 'nombre del autor legible');
@@ -377,7 +399,13 @@ await page.click('#ex-langs .chip:text-is("Español")');
 await page.fill('#ex-search', 'cervantes');
 await page.press('#ex-search', 'Enter');
 await page.waitForFunction(() => document.querySelectorAll('#ex-list .ex-card').length > 0);
-await page.click('#ex-cats .chip:text-is("★ Éxito y mentalidad")');
+await page.fill('#ex-search', '');
+await page.press('#ex-search', 'Enter');
+await page.click('#ex-cats .chip:text-is("Todas las categorías")');
+await page.waitForSelector('#ex-shelves .shelf:has-text("Éxito y mentalidad")', { timeout: 5000 }).catch(() => {});
+check((await page.$$('#ex-shelves .shelf')).length === 7, 'colecciones recomendadas como tarjetas');
+await page.screenshot({ path: path.join(OUT, '11-explorar-colecciones.png') });
+await page.click('#ex-shelves .shelf:has-text("Éxito y mentalidad")');
 await page.waitForFunction(() => document.querySelector('#ex-list .ex-card .card-title')?.textContent.startsWith('Clásico'));
 const colQ = gutQueries[gutQueries.length - 1];
 check(colQ.ids && colQ.ids.split(',').includes('4507') && !colQ.languages, 'colección recomendada por números de libro (todos los idiomas)');
@@ -387,7 +415,8 @@ await page.waitForTimeout(300);
 check(gutQueries[gutQueries.length - 1].topic === 'business', 'categoría «Negocios y dinero»');
 await page.click('#ex-cats .chip:text-is("Poesía")');
 await page.waitForFunction(() => document.querySelectorAll('#ex-list .ex-card').length > 0);
-await page.click('#ex-more');
+// «Cargar más» (o la carga automática al llegar al final)
+if (await page.isVisible('#ex-more')) await page.click('#ex-more', { timeout: 3000 }).catch(() => {});
 await page.waitForFunction(() => document.querySelectorAll('#ex-list .ex-card').length === 3);
 check(true, 'cargar más resultados (paginación)');
 await page.screenshot({ path: path.join(OUT, '10-explorar.png') });
@@ -395,6 +424,7 @@ await page.click('#ex-list .ex-card:has-text("Don Quijote") .btn.primary');
 await page.waitForSelector('#ex-list .ex-card:has-text("Don Quijote") .btn:has-text("Abrir")', { timeout: 15000 });
 const added = await page.evaluate(async () => (await window.__evz.db.listDocs()).find((d) => d.sourceId === 'gutenberg:2000'));
 check(added && added.title === 'Don Quijote' && added.author.startsWith('Miguel de Cervantes') && !!added.cover, 'libro descargado y guardado con título, autor y portada');
+check(served.includes('/libros/pg2000.epub'), 'descarga directa desde la copia de la app (sin servidor)');
 const navs = [];
 context.on('request', (r) => { if (r.isNavigationRequest()) navs.push(r.url()); });
 await page.click('#ex-list .ex-card:has-text("Libro sin CORS") .btn.primary');
@@ -435,7 +465,7 @@ await page.click('#tab-mine');
 await page.waitForSelector('.card:has(.card-title:text-is("Don Quijote"))');
 check(true, 'aparece en «Mis libros»');
 for (const t of ['Don Quijote', 'Novelas ejemplares', 'Libro de Prueba']) {
-  while (await page.$(`.card:has(.card-title:text-is("${t}")):has(.badge:text-is("epub")) .more`) && (await page.$$('#lib-list .card')).length > files.length) {
+  while (await page.$(`.card:has(.card-title:text-is("${t}"))[data-format="epub"] .more`) && (await page.$$('#lib-list .card')).length > files.length) {
     await page.click(`.card:has(.card-title:text-is("${t}")) >> nth=0 >> .more`);
     await page.click('#dm-delete');
     await page.waitForTimeout(300);
@@ -447,15 +477,16 @@ await context.unroute('https://gutendex.com/books/**');
 await context.unroute('https://www.gutenberg.org/**');
 
 console.log('Voces neuronales (modelo de prueba)');
-await openCard('.card:has(.badge:text-is("epub"))');
+await openCard('.card[data-format="epub"]');
 await page.click('#btn-voice');
 await page.waitForSelector('.sheet .nv-row');
-const nvRows = await page.$$eval('.sheet .nv-row .t', (els) => els.map((e) => e.textContent));
+const nvRows = await page.$$eval('.sheet .nv-row', (els) => els.map((e) => e.textContent));
 check(nvRows.length === 5 && nvRows.some((t) => /Claude/.test(t)), `catálogo de voces en español (${nvRows.length})`);
+check(await page.isVisible('.sheet .reco #reco-dl'), 'voz natural recomendada con un solo botón');
 await page.screenshot({ path: path.join(OUT, '08-voces-neuronales.png') });
 const NV = path.join(ROOT, 'tests', 'fixtures', 'neural');
 await page.setInputFiles('#voice-input', [path.join(NV, 'test-voice.onnx'), path.join(NV, 'test-voice.onnx.json')]);
-await page.waitForFunction(() => document.querySelector('#voice-label').textContent.startsWith('✦'), null, { timeout: 30000 });
+await page.waitForFunction(() => window.__evz.player.engine === window.__evz.neural, null, { timeout: 30000 });
 check(true, 'voz importada desde archivos y activada');
 check(await page.evaluate(async () => (await import('/js/neural/voices.js')).isRuntimeReady()), 'motor neural guardado para uso sin conexión');
 await page.click('#sheet-close').catch(() => {});
@@ -497,17 +528,22 @@ const dlState = await page.evaluate(async () => {
 check(dlState.ok && dlState.last === 1 && dlState.gone, 'descarga con progreso y eliminación de voces');
 
 console.log('Exportar a MP3');
-await page.click('#btn-voice');
+await page.click('#btn-more');
+await page.click('#mi-export');
 await page.waitForSelector('.sheet .btn:has-text("Capítulo actual")');
+await page.click('.sheet .btn:has-text("Capítulo actual")');
+await page.waitForSelector('.sheet #df-save', { timeout: 60000 });
+check((await page.textContent('#sheet-title')) === 'Audio listo', 'hoja «Audio listo» con Guardar y Compartir');
 const [mp3] = await Promise.all([
-  page.waitForEvent('download', { timeout: 60000 }),
-  page.click('.sheet .btn:has-text("Capítulo actual")')
+  page.waitForEvent('download', { timeout: 20000 }),
+  page.click('.sheet #df-save')
 ]);
 const mp3Buf = fs.readFileSync(await mp3.path());
 const mp3Ok = mp3Buf.length > 1000 && mp3Buf[0] === 0xff && (mp3Buf[1] & 0xe0) === 0xe0;
 check(mp3Ok, `MP3 exportado (${mp3Buf.length} bytes)`);
 check(mp3.suggestedFilename() === 'Libro de Prueba - Capitulo I.mp3', `nombre del archivo: ${mp3.suggestedFilename()}`);
 await page.waitForSelector('#busy', { state: 'hidden' });
+await page.click('#sheet-close');
 
 console.log('Funcionamiento sin conexión');
 await page.click('#btn-back');
@@ -518,11 +554,12 @@ await context.setOffline(true);
 await page.reload();
 await page.waitForSelector('#lib-list .card', { timeout: 10000 }).catch(() => {});
 check((await page.$$('#lib-list .card')).length === files.length, 'la app carga sin conexión');
-await openCard('.card:has(.badge:text-is("pdf"))');
+await openCard('.card[data-format="pdf"]');
 check(await page.$('#reader-content .s') !== null, 'abre un documento sin conexión');
 await page.click('#btn-back');
-await openCard('.card:has(.badge:text-is("epub"))');
-check((await page.textContent('#voice-label')).startsWith('✦'), 'voz neural disponible sin conexión');
+await openCard('.card[data-format="epub"]');
+await page.waitForFunction(() => window.__evz.player.engine === window.__evz.neural, null, { timeout: 10000 }).catch(() => {});
+check(await page.evaluate(() => window.__evz.player.engine === window.__evz.neural), 'voz neural disponible sin conexión');
 await page.evaluate(() => { window.__evz.neural.stats.audioMs = 0; });
 await page.click('#btn-play');
 await page.waitForFunction(() => window.__evz.neural.stats.audioMs > 0, null, { timeout: 20000 }).catch(() => {});

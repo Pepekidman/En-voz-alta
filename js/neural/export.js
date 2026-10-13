@@ -15,38 +15,58 @@ function floatToInt16(pcm, padSamples = 0) {
  * Devuelve un Blob audio/mpeg.
  */
 export async function exportMp3({ engine, player, from, to, onProgress, signal, kbps = 48 }) {
-  await engine.ensureLoaded();
+  const abortError = () => new DOMException('Cancelado', 'AbortError');
+  // Cualquier espera termina en cuanto el usuario cancela
+  const cancelled = new Promise((_, reject) => {
+    if (signal) signal.addEventListener('abort', () => reject(abortError()), { once: true });
+  });
+  cancelled.catch(() => {});
+  const race = (p) => Promise.race([p, cancelled]);
+  await race(engine.ensureLoaded());
   const worker = new Worker(new URL('./mp3-worker.js', import.meta.url));
-  const parts = [];
+  let blob = new Blob([], { type: 'audio/mpeg' });
+  let parts = [];
+  let pending = 0;
   let reqId = 0;
   const waiting = new Map();
+  // Se consolida en un Blob cada ~4 MB para no acumular todo el MP3 en memoria
+  const flushParts = () => {
+    if (!parts.length) return;
+    blob = new Blob([blob, ...parts], { type: 'audio/mpeg' });
+    parts = [];
+    pending = 0;
+  };
+  const failAll = (err) => {
+    for (const w of waiting.values()) w.reject(err);
+    waiting.clear();
+  };
+  worker.onerror = (e) => { e.preventDefault && e.preventDefault(); failAll(new Error('El codificador de audio falló: ' + (e.message || 'error'))); };
+  worker.onmessageerror = () => failAll(new Error('El codificador de audio no respondió'));
   worker.onmessage = (e) => {
     const m = e.data;
     if (m.type === 'mp3') {
-      parts.push(...m.parts);
-      const w = waiting.get(m.id);
-      if (w) { waiting.delete(m.id); w(); }
-    } else if (m.type === 'ready') {
-      const w = waiting.get('ready');
-      if (w) { waiting.delete('ready'); w(); }
+      for (const part of m.parts) { parts.push(part); pending += part.byteLength; }
+      if (pending > 4 * 1024 * 1024) flushParts();
     }
+    const w = waiting.get(m.type === 'ready' ? 'ready' : m.id);
+    if (w) { waiting.delete(m.type === 'ready' ? 'ready' : m.id); w.resolve(); }
   };
-  const send = (msg, transfer) => new Promise((resolve) => {
+  const send = (msg, transfer) => race(new Promise((resolve, reject) => {
     const id = msg.type === 'init' ? 'ready' : ++reqId;
-    waiting.set(id, resolve);
+    waiting.set(id, { resolve, reject });
     worker.postMessage({ ...msg, id }, transfer || []);
-  });
+  }));
 
   try {
     let sampleRate = null;
     const t0 = performance.now();
     const total = Math.max(1, player.cum[to] - player.cum[from]);
     for (let i = from; i < to; i++) {
-      if (signal && signal.cancelled) throw new DOMException('Cancelado', 'AbortError');
+      if (signal && signal.aborted) throw abortError();
       const info = player.chunks(i);
       for (let c = 0; c < info.chunks.length; c++) {
         const isLast = c === info.chunks.length - 1;
-        const res = await engine.synth(info.chunks[c].text, true);
+        const res = await race(engine.synth(info.chunks[c].text, true));
         engine.cache.delete(info.chunks[c].text);
         if (!sampleRate) {
           sampleRate = res.sampleRate;
@@ -62,7 +82,8 @@ export async function exportMp3({ engine, player, from, to, onProgress, signal, 
     }
     if (!sampleRate) throw new Error('No hay texto para exportar.');
     await send({ type: 'flush' });
-    return new Blob(parts, { type: 'audio/mpeg' });
+    flushParts();
+    return blob;
   } finally {
     worker.terminate();
   }

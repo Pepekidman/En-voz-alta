@@ -4,6 +4,16 @@ Lector de documentos en voz alta para el celular. Funciona **sin conexión**, se
 
 ## Funciones
 
+**Uso sencillo (nuevo en 1.3)**
+- **Barra inferior** con *Mis libros*, *Explorar* y *Ajustes*, y un único botón **+ Agregar** para subir un archivo, pegar texto o buscar libros gratis.
+- **Continuar escuchando:** una tarjeta en la biblioteca retoma el último libro con un toque.
+- **Mini reproductor:** la lectura sigue sonando mientras navegas por la biblioteca.
+- **Bienvenida en tres pasos**, con un texto de ejemplo que suena con un toque.
+- El botón **✦ Mejorar voz** lleva a la voz natural recomendada, que se descarga con un solo botón.
+- En el lector, el menú **⋮** reúne Índice, Buscar, Marcadores, **Exportar audio MP3**, Temporizador y Datos del libro.
+- **Archivo listo:** el MP3, el respaldo y los textos exportados se pueden **guardar** en el teléfono o **compartir / abrir con** otra app.
+- Mensajes de error comprensibles, **Deshacer** al eliminar un libro y **Ajustes → Diagnóstico** para copiar un informe si algo falla.
+
 **Lectura**
 - Formatos: **PDF** (con texto), **EPUB**, **TXT**, **DOCX**, **ODT**, **FB2**, **HTML**, **Markdown**, **RTF**. También puedes pegar texto.
 - Resaltado de la frase que se está leyendo y, si el motor de voz lo permite, de la palabra. Hay un modo «estimado» para Android.
@@ -81,7 +91,12 @@ Lector de documentos en voz alta para el celular. Funciona **sin conexión**, se
 
 ## Descargas desde «Explorar»
 
-Project Gutenberg no permite que otras apps web descarguen sus archivos: no envía la cabecera CORS. Por eso hay dos modos.
+Project Gutenberg no permite que otras apps web descarguen sus archivos: no envía la cabecera CORS. Por eso hay tres modos.
+
+**Con un toque, sin configurar nada (libros marcados ⚡ Directo)**
+- Al publicar, GitHub Actions copia junto a la app, en la carpeta `libros/`, unos 180 libros: los de las colecciones recomendadas y los libros en español más populares.
+- El script es `tools/mirror-books.mjs`. Descarga de a uno, con pausas, y reutiliza entre publicaciones lo que ya bajó.
+- Esos libros se descargan directamente desde el sitio de la app.
 
 **Sin configurar nada (dos pasos)**
 1. «Agregar a mi biblioteca» abre la descarga en el navegador.
@@ -146,6 +161,8 @@ Las capturas quedan en `tests/output/`.
 | `js/media.js` | Controles de la pantalla de bloqueo y pantalla encendida |
 | `js/explore.js`, `js/catalog/` | Pestaña «Explorar»: catálogo de Project Gutenberg (Gutendex), filtros y descargas |
 | `tools/cloudflare-worker.js` | Servidor de descarga opcional para «Explorar» |
+| `tools/mirror-books.mjs` | Copia de libros de Gutenberg para la descarga directa ⚡ (se ejecuta al publicar) |
+| `js/log.js` | Registro local de errores y el informe de diagnóstico |
 | `js/neural/` | Voces neuronales: catálogo y descargas (`voices.js`), motor y reproducción (`engine.js`), síntesis Piper en un worker (`worker.js`), exportación a MP3 (`export.js`, `mp3-worker.js`) |
 | `js/db.js` | Almacenamiento local (IndexedDB) |
 | `sw.js`, `manifest.webmanifest` | Funcionamiento sin conexión, instalación y «Compartir con» |

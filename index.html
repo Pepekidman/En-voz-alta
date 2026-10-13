@@ -45,6 +45,9 @@
       <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></symbol>
       <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></symbol>
       <symbol id="i-target" viewBox="0 0 24 24"><polygon points="3 11 22 2 13 21 11 13 3 11"/></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+      <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/></symbol>
+      <symbol id="i-headphones" viewBox="0 0 24 24"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></symbol>
       <symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></symbol>
       <symbol id="i-external" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></symbol>
       <symbol id="i-check" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></symbol>
@@ -53,87 +56,111 @@
   </svg>
 
   <div id="app">
-    <!-- ============ Biblioteca ============ -->
+    <!-- ============ Biblioteca y Explorar ============ -->
     <section id="view-library" class="view active" aria-label="Biblioteca">
       <header class="topbar">
         <div class="brand">
-          <img src="icons/icon.svg" alt="" width="30" height="30">
+          <img src="icons/icon.svg" alt="" width="32" height="32">
           <h1>En Voz Alta</h1>
         </div>
-        <button id="btn-settings" class="icon-btn" aria-label="Ajustes"><svg class="ic"><use href="#i-sliders"/></svg></button>
       </header>
 
-      <nav class="tabs" role="tablist" aria-label="Secciones">
-        <button id="tab-mine" class="tab on" role="tab" aria-selected="true"><svg class="ic"><use href="#i-book"/></svg> Mis libros</button>
-        <button id="tab-explore" class="tab" role="tab" aria-selected="false"><svg class="ic"><use href="#i-compass"/></svg> Explorar gratis</button>
-      </nav>
-
-      <div class="lib-body" id="mine">
+      <div class="lib-body" id="mine" role="tabpanel" aria-labelledby="tab-mine">
         <div id="install-banner" class="banner hidden">
           <span>Instala la app para usarla sin conexión desde tu pantalla de inicio.</span>
           <button id="btn-install" class="btn small primary">Instalar</button>
         </div>
         <div id="update-banner" class="banner hidden">
-          <span>Hay una versión nueva disponible.</span>
+          <span>Hay una versión nueva de la app.</span>
           <button id="btn-update" class="btn small primary">Actualizar</button>
         </div>
 
-        <div class="lib-tools">
-          <input type="search" id="lib-search" placeholder="Buscar en la biblioteca" aria-label="Buscar en la biblioteca">
-          <select id="lib-sort" aria-label="Ordenar">
-            <option value="recent">Recientes</option>
-            <option value="title">Título</option>
-            <option value="progress">Progreso</option>
-            <option value="added">Agregados</option>
-          </select>
+        <div id="continue" class="continue hidden"></div>
+
+        <div id="lib-section" class="hidden">
+          <div class="section-head">
+            <h2>Tu biblioteca</h2>
+            <span id="lib-count" class="muted small"></span>
+          </div>
+          <div class="lib-tools" id="lib-tools">
+            <input type="search" id="lib-search" placeholder="Buscar en tus libros" aria-label="Buscar en tus libros">
+            <select id="lib-sort" aria-label="Ordenar">
+              <option value="recent">Recientes</option>
+              <option value="title">Título</option>
+              <option value="progress">Progreso</option>
+              <option value="added">Agregados</option>
+            </select>
+          </div>
+          <div id="lib-list" class="lib-list"></div>
         </div>
 
-        <div id="lib-list" class="lib-list"></div>
-
-        <div id="lib-empty" class="empty hidden">
-          <svg class="ic big"><use href="#i-book"/></svg>
-          <h2>Tu biblioteca está vacía</h2>
-          <p>Agrega un PDF, EPUB, TXT, DOCX, ODT, FB2, HTML o Markdown y escúchalo en voz alta, incluso sin conexión.</p>
-          <p class="muted small">Los archivos se procesan y guardan sólo en este dispositivo.</p>
-          <button class="btn primary" id="empty-explore" style="margin-top:12px"><svg class="ic"><use href="#i-compass"/></svg> Explorar libros gratis</button>
+        <div id="lib-empty" class="welcome hidden">
+          <img src="icons/icon.svg" alt="" width="76" height="76">
+          <h2>Te damos la bienvenida a En Voz Alta</h2>
+          <p class="lead">Escucha libros y documentos con una voz natural, incluso sin internet.</p>
+          <ol class="steps">
+            <li><span class="step-n">1</span><div><b>Agrega un libro.</b> Elige uno gratis en Explorar o sube tu PDF, EPUB o Word.</div></li>
+            <li><span class="step-n">2</span><div><b>Toca ▶</b> y sigue el texto resaltado mientras escuchas.</div></li>
+            <li><span class="step-n">3</span><div><b>Mejora la voz.</b> Descarga una voz natural ✦ una sola vez y úsala sin conexión.</div></li>
+          </ol>
+          <div class="btn-col">
+            <button class="btn primary block" id="empty-explore"><svg class="ic"><use href="#i-compass"/></svg> Explorar libros gratis</button>
+            <button class="btn secondary block" id="empty-file"><svg class="ic"><use href="#i-file"/></svg> Agregar un archivo mío</button>
+            <button class="btn ghost block" id="empty-sample"><svg class="ic"><use href="#i-play"/></svg> Escuchar un ejemplo</button>
+          </div>
+          <p class="muted small">Tus archivos se guardan sólo en este teléfono.</p>
         </div>
       </div>
 
-      <div class="lib-body hidden" id="explore">
+      <div class="lib-body hidden" id="explore" role="tabpanel" aria-labelledby="tab-explore">
         <div class="ex-tools">
           <div class="lib-tools">
-            <input type="search" id="ex-search" placeholder="Buscar título o autor" aria-label="Buscar libros" enterkeyhint="search">
+            <input type="search" id="ex-search" placeholder="Buscar título o autor" aria-label="Buscar libros gratis" enterkeyhint="search">
             <select id="ex-sort" aria-label="Ordenar"></select>
           </div>
           <div class="chip-row" id="ex-sources" aria-label="Fuente"></div>
-          <div class="chip-row" id="ex-langs" aria-label="Idioma"></div>
-          <div class="chip-row" id="ex-cats" aria-label="Categoría"></div>
+          <div class="chip-row" id="ex-langs" role="group" aria-label="Idioma"></div>
+          <div class="chip-row" id="ex-cats" role="group" aria-label="Categoría"></div>
+        </div>
+        <div id="ex-shelves" class="shelves"></div>
+        <div id="ex-col-head" class="col-head hidden">
+          <button id="ex-col-back" class="linklike"><svg class="ic"><use href="#i-back"/></svg> Todas las colecciones</button>
+          <h2 id="ex-col-title"></h2>
         </div>
         <p id="ex-note" class="muted small ex-note"></p>
         <div id="ex-list" class="lib-list"></div>
-        <p id="ex-status" class="muted ex-status"></p>
+        <div id="ex-status" class="muted ex-status" role="status"></div>
         <button id="ex-more" class="btn secondary block hidden">Cargar más</button>
       </div>
 
-      <div class="fab-row">
-        <button id="btn-paste" class="btn secondary"><svg class="ic"><use href="#i-clipboard"/></svg> Pegar texto</button>
-        <label class="btn primary" for="file-input"><svg class="ic"><use href="#i-plus"/></svg> Agregar archivo</label>
-        <input type="file" id="file-input" multiple hidden>
+      <button id="btn-add" class="fab" aria-label="Agregar un libro"><svg class="ic"><use href="#i-plus"/></svg><span>Agregar</span></button>
+
+      <div id="mini" class="mini hidden" role="region" aria-label="Reproductor">
+        <button id="mini-open" class="mini-open">
+          <span class="mini-cover" id="mini-cover"></span>
+          <span class="mini-text"><span id="mini-title" class="mini-title"></span><span id="mini-sub" class="mini-sub"></span></span>
+        </button>
+        <button id="mini-play" class="mini-play" aria-label="Reproducir"><svg class="ic"><use href="#i-play"/></svg></button>
       </div>
+
+      <nav class="bottom-nav" role="tablist" aria-label="Secciones">
+        <button id="tab-mine" class="nav-item on" role="tab" aria-selected="true" aria-controls="mine"><svg class="ic"><use href="#i-book"/></svg><span>Mis libros</span></button>
+        <button id="tab-explore" class="nav-item" role="tab" aria-selected="false" aria-controls="explore"><svg class="ic"><use href="#i-compass"/></svg><span>Explorar</span></button>
+        <button id="btn-settings" class="nav-item"><svg class="ic"><use href="#i-gear"/></svg><span>Ajustes</span></button>
+      </nav>
+      <input type="file" id="file-input" multiple hidden>
     </section>
 
     <!-- ============ Lector ============ -->
     <section id="view-reader" class="view" aria-label="Lector">
       <header class="topbar reader-top">
         <button id="btn-back" class="icon-btn" aria-label="Volver a la biblioteca"><svg class="ic"><use href="#i-back"/></svg></button>
-        <button id="r-heading" class="reader-heading" aria-label="Índice">
+        <button id="r-heading" class="reader-heading" aria-label="Ver el índice">
           <span id="r-title" class="r-title"></span>
           <span id="r-chapter" class="r-chapter"></span>
         </button>
-        <button id="btn-toc" class="icon-btn" aria-label="Índice"><svg class="ic"><use href="#i-list"/></svg></button>
-        <button id="btn-search" class="icon-btn" aria-label="Buscar en el texto"><svg class="ic"><use href="#i-search"/></svg></button>
-        <button id="btn-bookmarks" class="icon-btn" aria-label="Marcadores"><svg class="ic"><use href="#i-bookmark"/></svg></button>
-        <button id="btn-appearance" class="icon-btn" aria-label="Apariencia"><svg class="ic"><use href="#i-type"/></svg></button>
+        <button id="btn-appearance" class="icon-btn text-icon" aria-label="Apariencia del texto">Aa</button>
+        <button id="btn-more" class="icon-btn" aria-label="Más opciones"><svg class="ic"><use href="#i-more"/></svg></button>
       </header>
 
       <main id="reader" class="reader" tabindex="-1">
@@ -144,9 +171,10 @@
 
       <footer class="player">
         <div class="seek-row">
-          <input type="range" id="seek" min="0" max="0" value="0" step="1" aria-label="Posición en el documento">
+          <input type="range" id="seek" min="0" max="0" value="0" step="1" aria-label="Posición en el libro">
           <div class="seek-meta">
             <span id="pct">0%</span>
+            <span id="player-status" class="player-status hidden">Preparando la voz…</span>
             <span id="remaining" class="muted"></span>
           </div>
         </div>
@@ -158,10 +186,10 @@
           <button id="btn-next-para" class="ctl" aria-label="Párrafo siguiente"><svg class="ic"><use href="#i-skip-fwd"/></svg><span>Párrafo</span></button>
         </div>
         <div class="chips">
-          <button id="btn-speed" class="chip" aria-label="Velocidad">1.0×</button>
+          <button id="btn-speed" class="chip" aria-label="Velocidad: 1×">1×</button>
           <button id="btn-voice" class="chip" aria-label="Voz"><svg class="ic"><use href="#i-voice"/></svg><span id="voice-label">Voz</span></button>
-          <button id="btn-sleep" class="chip" aria-label="Temporizador de sueño"><svg class="ic"><use href="#i-moon"/></svg><span id="sleep-label">Dormir</span></button>
-          <button id="btn-add-bm" class="chip" aria-label="Agregar marcador"><svg class="ic"><use href="#i-bookmark"/></svg><span>+</span></button>
+          <button id="btn-sleep" class="chip icon-chip" aria-label="Temporizador para dormir" title="Temporizador para dormir"><svg class="ic"><use href="#i-moon"/></svg><span id="sleep-label"></span></button>
+          <button id="btn-add-bm" class="chip icon-chip" aria-label="Agregar un marcador aquí" title="Agregar un marcador aquí"><svg class="ic"><use href="#i-bookmark"/></svg></button>
         </div>
       </footer>
     </section>
@@ -169,7 +197,8 @@
 
   <!-- Hoja inferior reutilizable -->
   <div id="backdrop" class="backdrop hidden"></div>
-  <div id="sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+  <div id="sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="sheet-title" tabindex="-1">
+    <div class="sheet-grip" aria-hidden="true"></div>
     <div class="sheet-head">
       <h2 id="sheet-title"></h2>
       <button id="sheet-close" class="icon-btn" aria-label="Cerrar"><svg class="ic"><use href="#i-x"/></svg></button>

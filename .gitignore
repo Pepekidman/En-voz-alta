@@ -3,3 +3,4 @@ _site/
 tests/output/
 tests/fixtures/prueba.pdf
 .DS_Store
+mirror/

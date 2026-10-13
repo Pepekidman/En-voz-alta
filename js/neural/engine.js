@@ -105,10 +105,13 @@ export class NeuralEngine {
       const done = (fn) => (v) => { clearTimeout(timer); fn(v); };
       this.waiting.set(id, { resolve: done(resolve), reject: done(reject) });
       if (timeoutMs) {
-        timer = setTimeout(() => {
+        // Con la pantalla apagada el sistema puede congelar el motor: no cuenta como fallo
+        const check = () => {
           if (!this.waiting.has(id)) return;
+          if (typeof document !== 'undefined' && document.hidden) { timer = setTimeout(check, timeoutMs); return; }
           this.resetWorker(new Error('El motor de voz no respondió a tiempo'));
-        }, timeoutMs);
+        };
+        timer = setTimeout(check, timeoutMs);
       }
       this.ensureWorker().postMessage({ ...msg, id }, transfer || []);
     });
@@ -133,6 +136,7 @@ export class NeuralEngine {
     this.voice = voice;
     this.speaker = speaker;
     this.cache.clear();
+    for (const j of this.jobs) j.reject(new Error('Cambio de voz'));
     this.jobs = [];
     this.loaded = null;
     return this.ensureLoaded();

@@ -303,7 +303,7 @@ export class Player extends EventTarget {
       },
       onerror: (e) => {
         this.errors++;
-        this.emit('error', { idx: i, error: e.error || 'error' });
+        this.emit('error', { idx: i, error: e.error || 'error', message: e.message || '' });
         if (this.errors >= 3 || e.error === 'not-allowed' || e.error === 'not-supported' ||
             e.error === 'language-unavailable' || e.error === 'voice-unavailable') {
           this.pause();
@@ -348,7 +348,7 @@ export class Player extends EventTarget {
     if (sl.type === 'minutes') return Date.now() >= sl.until;
     if (sl.type === 'chapter') {
       const next = this.sentences[i + 1];
-      return !next || next.p >= sl.chapterEnd;
+      return !next || next.p >= this.chapterEndParagraph(this.sentences[i].p);
     }
     return false;
   }

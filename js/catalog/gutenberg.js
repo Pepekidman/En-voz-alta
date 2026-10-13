@@ -4,6 +4,19 @@ import { fetchJson, fetchFile, safeName } from './net.js';
 
 const API = 'https://gutendex.com/books/';
 
+// Libros copiados junto a la app (GitHub Pages): se descargan con un toque.
+const MIRROR = new URL('../../libros/', import.meta.url).href;
+let mirrorPromise = null;
+function loadMirror() {
+  if (!mirrorPromise) {
+    mirrorPromise = fetch(MIRROR + 'index.json', { cache: 'no-cache' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => ({ books: new Set(d?.books || []), covers: new Set(d?.covers || []) }))
+      .catch(() => ({ books: new Set(), covers: new Set() }));
+  }
+  return mirrorPromise;
+}
+
 // Categorías: el filtro "topic" de Gutendex busca en temas y estanterías de Gutenberg.
 const CATEGORIES = [
   // Crecimiento personal
@@ -125,10 +138,13 @@ function pickFile(formats) {
   return null;
 }
 
-function toBook(r) {
+function toBook(r, mirror) {
   const file = pickFile(r.formats || {});
   if (!file) return null;
+  const mirrored = mirror && mirror.books.has(r.id);
   return {
+    mirrored,
+    mirrorUrl: mirrored ? `${MIRROR}pg${r.id}.epub` : null,
     source: 'gutenberg',
     id: String(r.id),
     title: r.title.replace(/\s*\$[a-z]\s*/g, ' ').replace(/\s+/g, ' ').trim(),
@@ -137,7 +153,7 @@ function toBook(r) {
     lang: (r.languages || [])[0] || '',
     subjects: translateSubjects(r.subjects, r.bookshelves),
     downloads: r.download_count || 0,
-    cover: r.formats?.['image/jpeg'] || null,
+    cover: mirror && mirror.covers.has(r.id) ? `${MIRROR}pg${r.id}.jpg` : (r.formats?.['image/jpeg'] || null),
     format: file.format,
     fileUrl: file.url,
     fileType: file.type,
@@ -172,8 +188,8 @@ export const gutenberg = {
     }
     if (sort) p.set('sort', sort);
     if (page > 1) p.set('page', String(page));
-    const data = await fetchJson(`${API}?${p}`, { signal });
-    let items = (data.results || []).map(toBook).filter(Boolean);
+    const [data, mirror] = await Promise.all([fetchJson(`${API}?${p}`, { signal }), loadMirror()]);
+    let items = (data.results || []).map((r) => toBook(r, mirror)).filter(Boolean);
     if (c && c.ids) items = items.sort((a, b) => (b.lang === 'es') - (a.lang === 'es'));
     return { items, total: data.count || 0, next: data.next ? page + 1 : null, collection: !!(c && c.ids) };
   },
@@ -181,7 +197,13 @@ export const gutenberg = {
     return `${proxy.replace(/\/+$/, '')}/?url=${encodeURIComponent(url)}`;
   },
   async download(b, { signal, onProgress, proxy } = {}) {
+    if (b.mirrored) {
+      return fetchFile(b.mirrorUrl, { name: `pg${b.id} ${safeName(b.title)}.epub`, type: 'application/epub+zip', signal, onProgress });
+    }
     const url = proxy ? this.viaProxy(b.fileUrl, proxy) : b.fileUrl;
     return fetchFile(url, { name: `pg${b.id} ${safeName(b.title)}.${b.fileExt}`, type: b.fileType, signal, onProgress });
+  },
+  canDownloadDirect(b, proxy) {
+    return !!(b.mirrored || proxy);
   }
 };
