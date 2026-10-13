@@ -334,6 +334,11 @@ await context.route('https://gutendex.com/books/**', (route) => {
     bookshelves: ['Category: Novels'], languages: [lang], download_count: 5000 - id,
     formats: { 'application/epub+zip': `https://www.gutenberg.org/ebooks/${id}.epub3.images`, 'image/jpeg': `https://www.gutenberg.org/cache/epub/${id}/pg${id}.cover.medium.jpg`, ...extra }
   });
+  if (u.searchParams.get('ids')) {
+    const ids = u.searchParams.get('ids').split(',').map(Number);
+    const res = ids.slice(0, 3).map((id, k) => mk(id, `Clásico ${id}`, 'Allen, James', k === 1 ? 'es' : 'en'));
+    return route.fulfill({ status: 200, headers: { ...CORS, 'Content-Type': 'application/json' }, body: JSON.stringify({ count: ids.length, next: null, results: res }) });
+  }
   if ((u.searchParams.get('search') || '').includes('tracy')) {
     return route.fulfill({ status: 200, headers: { ...CORS, 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 0, next: null, results: [] }) });
   }
@@ -372,6 +377,11 @@ await page.click('#ex-langs .chip:text-is("Español")');
 await page.fill('#ex-search', 'cervantes');
 await page.press('#ex-search', 'Enter');
 await page.waitForFunction(() => document.querySelectorAll('#ex-list .ex-card').length > 0);
+await page.click('#ex-cats .chip:text-is("★ Éxito y mentalidad")');
+await page.waitForFunction(() => document.querySelector('#ex-list .ex-card .card-title')?.textContent.startsWith('Clásico'));
+const colQ = gutQueries[gutQueries.length - 1];
+check(colQ.ids && colQ.ids.split(',').includes('4507') && !colQ.languages, 'colección recomendada por números de libro (todos los idiomas)');
+check((await page.$eval('#ex-list .ex-card .card-meta', (e) => e.textContent)).includes('ES'), 'en las colecciones primero aparecen los libros en español');
 await page.click('#ex-cats .chip:text-is("Negocios y dinero")');
 await page.waitForTimeout(300);
 check(gutQueries[gutQueries.length - 1].topic === 'business', 'categoría «Negocios y dinero»');

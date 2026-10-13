@@ -38,7 +38,16 @@ Lector de documentos en voz alta para el celular. Funciona **sin conexión**, se
 
 **Explorar libros gratis (nuevo)**
 - Catálogo de [Project Gutenberg](https://www.gutenberg.org): más de 75.000 libros de dominio público, gratuitos y legales, unos mil de ellos en español. La consulta se hace con la API [Gutendex](https://gutendex.com).
-- Búsqueda por título o autor, con filtros por idioma y 22 categorías (Novela, Cuentos, Poesía, Teatro, Aventuras, Misterio, Ciencia ficción, Historia, Filosofía, Infantil…).
+- **Colecciones recomendadas** con números de libro verificados:
+  - Para crecer, en español (Ramón y Cajal, Ingenieros, Balmes, Martí, Rodó, Gracián…).
+  - Negocios y dinero.
+  - Éxito y mentalidad.
+  - Estoicismo.
+  - Meditar y espiritualidad.
+  - Aprender y concentrarse.
+  - Liderazgo y comunicación.
+- Búsqueda por título o autor, con filtros por idioma y más de 30 categorías: negocios, éxito, desarrollo personal, estoicismo, meditación, aprender, oratoria, liderazgo, salud, novela, cuentos, poesía, teatro, misterio, ciencia ficción, historia, filosofía…
+- Si no encuentras a un autor actual, la app explica que sus libros tienen derechos de autor y ofrece alternativas.
 - Orden por popularidad o por fecha de incorporación. Tocar el nombre de un autor muestra el resto de sus libros.
 - Se descarga el **EPUB**, que trae texto corregido y capítulos; para escuchar es mejor que un PDF escaneado. Al importarlo se quita el aviso legal en inglés de Gutenberg para que no se lea en voz alta.
 - Cada tarjeta indica si el libro ya está en tu biblioteca.

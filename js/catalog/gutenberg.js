@@ -42,7 +42,43 @@ const CATEGORIES = [
 ].map(([id, label, topic]) => ({ id, label, topic }));
 
 // Colecciones recomendadas (números de libro verificados en Project Gutenberg)
-const COLLECTIONS = [];
+const COLLECTIONS = [
+  {
+    id: 'col-es', label: '★ Para crecer, en español',
+    desc: 'clásicos en español sobre carácter, voluntad, criterio y superación',
+    ids: [66373, 64974, 28929, 43861, 22899, 79262, 65815, 56301, 62691, 63402, 58331, 60675, 77072, 12840]
+  },
+  {
+    id: 'col-negocios', label: '★ Negocios y dinero',
+    desc: 'Wattles, Barnum, Conwell, Franklin y otros clásicos de la riqueza (en inglés)',
+    ids: [59844, 8581, 368, 43855, 14418, 41510, 4286]
+  },
+  {
+    id: 'col-mentalidad', label: '★ Éxito y mentalidad',
+    desc: 'James Allen, Samuel Smiles, Arnold Bennett, Emerson y más',
+    ids: [4507, 935, 2541, 2274, 12811, 75928, 33917, 21291, 21622, 2944, 74878, 148, 64974, 43861]
+  },
+  {
+    id: 'col-estoicos', label: '★ Estoicismo',
+    desc: 'Marco Aurelio, Epicteto y Séneca (en inglés)',
+    ids: [2680, 45109, 10661, 64576, 56075]
+  },
+  {
+    id: 'col-meditar', label: '★ Meditar y espiritualidad',
+    desc: 'Tao Te King, El profeta, Siddhartha, Dhammapada, Bhagavad Gita y más (en inglés)',
+    ids: [216, 58585, 2500, 2017, 2388, 7452, 10740, 13402, 23559, 1653, 205]
+  },
+  {
+    id: 'col-aprender', label: '★ Aprender y concentrarse',
+    desc: 'memoria, concentración, lógica y métodos de estudio',
+    ids: [66373, 28929, 41478, 1570, 41838, 23347, 30309, 16287, 12840]
+  },
+  {
+    id: 'col-liderazgo', label: '★ Liderazgo y comunicación',
+    desc: 'El arte de la guerra, El príncipe, Confucio y oratoria',
+    ids: [132, 1232, 3330, 16317, 22899, 77072]
+  }
+];
 CATEGORIES.unshift(...COLLECTIONS);
 
 const SUBJECT_ES = [
