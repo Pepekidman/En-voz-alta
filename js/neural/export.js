@@ -11,10 +11,10 @@ function floatToInt16(pcm, padSamples = 0) {
 
 /**
  * opts: { engine (NeuralEngine con voz cargada), player, from, to (frases),
- *         onProgress(fraction, etaSec), signal: { cancelled } }
- * Devuelve un Blob audio/mpeg.
+ *         onProgress(fraction, etaSec), signal (AbortSignal), onSkip(texto, error) }
+ * Devuelve { blob (audio/mpeg), skipped (fragmentos que no se pudieron leer) }.
  */
-export async function exportMp3({ engine, player, from, to, onProgress, signal, kbps = 48 }) {
+export async function exportMp3({ engine, player, from, to, onProgress, signal, onSkip, kbps = 48 }) {
   const abortError = () => new DOMException('Cancelado', 'AbortError');
   // Cualquier espera termina en cuanto el usuario cancela
   const cancelled = new Promise((_, reject) => {
@@ -59,6 +59,9 @@ export async function exportMp3({ engine, player, from, to, onProgress, signal, 
 
   try {
     let sampleRate = null;
+    let skipped = 0;
+    let failedInARow = 0;
+    let done = 0;
     const t0 = performance.now();
     const total = Math.max(1, player.cum[to] - player.cum[from]);
     for (let i = from; i < to; i++) {
@@ -66,8 +69,28 @@ export async function exportMp3({ engine, player, from, to, onProgress, signal, 
       const info = player.chunks(i);
       for (let c = 0; c < info.chunks.length; c++) {
         const isLast = c === info.chunks.length - 1;
-        const res = await race(engine.synth(info.chunks[c].text, true));
-        engine.cache.delete(info.chunks[c].text);
+        const text = info.chunks[c].text;
+        let res;
+        try {
+          res = await race(engine.synth(text, true));
+          failedInARow = 0;
+        } catch (e) {
+          if (e.name === 'AbortError' || (signal && signal.aborted)) throw e;
+          // Una frase que el motor no puede leer no arruina todo el audio:
+          // se omite (con un silencio breve), salvo que fallen muchas seguidas.
+          skipped++;
+          failedInARow++;
+          if (failedInARow >= 3 || (skipped > 10 && skipped > done * 0.05)) throw e;
+          onSkip && onSkip(text, e);
+          res = null;
+        } finally {
+          engine.cache.delete(text);
+        }
+        done++;
+        if (!res) {
+          if (!sampleRate) continue;
+          res = { pcm: new Float32Array(Math.round(sampleRate * 0.4)), sampleRate };
+        }
         if (!sampleRate) {
           sampleRate = res.sampleRate;
           await send({ type: 'init', sampleRate, kbps });
@@ -83,7 +106,7 @@ export async function exportMp3({ engine, player, from, to, onProgress, signal, 
     if (!sampleRate) throw new Error('No hay texto para exportar.');
     await send({ type: 'flush' });
     flushParts();
-    return blob;
+    return { blob, skipped };
   } finally {
     worker.terminate();
   }

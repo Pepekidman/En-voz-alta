@@ -15,7 +15,7 @@ import { initExplore } from './explore.js';
 import { makeThumbnail } from './parsers/common.js';
 import { logError, getLog, clearLog, report, installGlobalHandlers } from './log.js';
 
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 
 const DEFAULTS = {
   rate: 1,
@@ -1538,18 +1538,20 @@ async function exportAudio(scope) {
   media.requestWake();
   busy('Preparando la exportación…', 0, { onCancel });
   try {
-    const blob = await exportMp3({
+    const { blob, skipped } = await exportMp3({
       engine: neural,
       player,
       from: r.from,
       to: r.to,
       signal: ctrl.signal,
+      onSkip: (text, err) => logError('exportar mp3 (frase omitida)', new Error(`${err.message} — «${text.slice(0, 80)}»`)),
       onProgress: (f, eta) => busy(`Exportando audio… ${Math.floor(f * 100)}%${eta ? `\nQuedan ≈ ${fmtDuration(eta)}` : ''}\nMantén la app abierta.`, f, { onCancel })
     });
     busy(false);
     deliverFile(name, blob, 'audio/mpeg', {
       title: 'Audio listo',
-      hint: 'Al guardar, el MP3 queda en la carpeta «Descargas». Con «Compartir» puedes abrirlo en tu reproductor de música o enviarlo.'
+      hint: 'Al guardar, el MP3 queda en la carpeta «Descargas». Con «Compartir» puedes abrirlo en tu reproductor de música o enviarlo.' +
+        (skipped ? ` (Se ${skipped === 1 ? 'omitió 1 frase' : `omitieron ${skipped} frases`} que la voz no pudo leer.)` : '')
     });
   } catch (e) {
     busy(false);

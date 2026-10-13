@@ -79,12 +79,12 @@ export class NeuralEngine {
       const w = this.waiting.get(m.id);
       if (!w) return;
       this.waiting.delete(m.id);
-      if (m.type === 'error') w.reject(new Error(m.message));
+      if (m.type === 'error') w.reject(Object.assign(new Error(m.message), { fatal: !!m.fatal }));
       else w.resolve(m);
     };
     this.worker.onerror = (e) => {
       e.preventDefault && e.preventDefault();
-      this.resetWorker(new Error(e.message || 'El motor de voz se detuvo (¿poca memoria?)'));
+      this.resetWorker(Object.assign(new Error(e.message || 'El motor de voz se detuvo (¿poca memoria?)'), { fatal: true }));
     };
     return this.worker;
   }
@@ -109,7 +109,7 @@ export class NeuralEngine {
         const check = () => {
           if (!this.waiting.has(id)) return;
           if (typeof document !== 'undefined' && document.hidden) { timer = setTimeout(check, timeoutMs); return; }
-          this.resetWorker(new Error('El motor de voz no respondió a tiempo'));
+          this.resetWorker(Object.assign(new Error('El motor de voz no respondió a tiempo'), { fatal: true }));
         };
         timer = setTimeout(check, timeoutMs);
       }
@@ -187,9 +187,19 @@ export class NeuralEngine {
     this.busy = true;
     const job = this.jobs.shift();
     try {
-      if (!this.ensureLoaded()) throw new Error('No hay una voz neural cargada');
-      await this.loaded;
-      const res = await this.call({ type: 'synth', text: job.text, opts: { speaker: this.speaker } }, null, 60000);
+      let res;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          if (!this.ensureLoaded()) throw new Error('No hay una voz neural cargada');
+          await this.loaded;
+          res = await this.call({ type: 'synth', text: job.text, opts: { speaker: this.speaker } }, null, 60000);
+          break;
+        } catch (e) {
+          // El motor se rompió (memoria, cierre del sistema): se reinicia y se reintenta una vez
+          if (!e.fatal || attempt > 0) throw e;
+          this.resetWorker(e);
+        }
+      }
       this.stats.synthMs += res.ms;
       this.stats.audioMs += (res.pcm.length / res.sampleRate) * 1000;
       job.resolve({ pcm: res.pcm, sampleRate: res.sampleRate });

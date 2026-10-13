@@ -515,6 +515,17 @@ await page.click('#btn-play');
 await page.waitForFunction(() => window.__evz.neural.stats.audioMs > 0, null, { timeout: 20000 }).catch(() => {});
 check(await page.evaluate(() => window.__evz.neural.stats.audioMs > 0 && window.__evz.player.playing), 'se recupera si el motor de voz se cierra');
 await page.click('#btn-play');
+// espeak pierde memoria en cada frase: sin reciclarlo se rompía tras ~90 frases ("Aborted()")
+const longRun = await page.evaluate(async () => {
+  const n = window.__evz.neural;
+  for (let i = 0; i < 200; i++) {
+    const t = `Frase de prueba número ${i}, con algo de texto para leer en voz alta.`;
+    try { await n.synth(t, true); } catch (e) { return { failAt: i, msg: e.message }; }
+    n.cache.delete(t);
+  }
+  return { ok: true };
+});
+check(longRun.ok, `sintetiza 200 frases seguidas sin romperse${longRun.ok ? '' : ` (falló en ${longRun.failAt}: ${longRun.msg})`}`);
 const dlState = await page.evaluate(async () => {
   const V = await import('/js/neural/voices.js');
   const fx = location.origin + '/tests/fixtures/neural/';
