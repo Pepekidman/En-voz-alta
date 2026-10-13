@@ -13,6 +13,9 @@ const OUT = path.resolve(process.argv[2] || 'mirror/libros');
 const POPULAR_PAGES = Number(process.env.MIRROR_POPULAR_PAGES || 4); // 32 libros por página
 const LANGS = (process.env.MIRROR_LANGS || 'es').split(',');
 const MAX_BYTES = 8 * 1024 * 1024;
+// Tiempo máximo por publicación: lo que falte se copia en la siguiente
+const BUDGET_MS = Number(process.env.MIRROR_BUDGET_MIN || 18) * 60000;
+const START = Date.now();
 const UA = 'EnVozAlta-mirror/1.0 (+https://github.com/Pepekidman/En-voz-alta)';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -21,7 +24,7 @@ fs.mkdirSync(OUT, { recursive: true });
 async function get(url, tries = 3) {
   for (let i = 1; ; i++) {
     try {
-      const res = await fetch(url, { headers: { 'User-Agent': UA }, redirect: 'follow' });
+      const res = await fetch(url, { headers: { 'User-Agent': UA }, redirect: 'follow', signal: AbortSignal.timeout(60000) });
       if (res.ok) return res;
       if (res.status === 404) return null;
       throw new Error(`HTTP ${res.status}`);
@@ -58,23 +61,35 @@ async function popularIds() {
 async function main() {
   const ids = new Set([...collectionIds(), ...(await popularIds())]);
   console.log(`Libros a reflejar: ${ids.size}`);
-  const have = [];
   let downloaded = 0;
+  let failed = 0;
+  // Índice con lo que ya está copiado (se actualiza a medida que avanza)
+  const writeIndex = () => {
+    const books = [...ids].filter((id) => fs.existsSync(path.join(OUT, `pg${id}.epub`)));
+    const covers = books.filter((id) => fs.existsSync(path.join(OUT, `pg${id}.jpg`)));
+    fs.writeFileSync(path.join(OUT, 'index.json'), JSON.stringify({ updated: new Date().toISOString(), books, covers }));
+    return books.length;
+  };
+  writeIndex();
   for (const id of ids) {
+    if (Date.now() - START > BUDGET_MS) { console.log('Tiempo agotado: el resto se copiará en la próxima publicación.'); break; }
+    if (failed >= 12 && downloaded === 0) { console.log('Gutenberg no responde: se reintentará en la próxima publicación.'); break; }
     const epub = path.join(OUT, `pg${id}.epub`);
     const cover = path.join(OUT, `pg${id}.jpg`);
     if (!fs.existsSync(epub)) {
       // EPUB sin imágenes: más liviano y con todo el texto
       const res = (await get(`https://www.gutenberg.org/ebooks/${id}.epub.noimages`)) ||
         (await get(`https://www.gutenberg.org/ebooks/${id}.epub3.images`));
-      if (!res) continue;
+      if (!res) { failed++; continue; }
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.length > MAX_BYTES || buf.length < 1000 || buf[0] !== 0x50 || buf[1] !== 0x4b) {
         console.warn(`  ✗ pg${id}: archivo inválido (${buf.length} bytes)`);
+        failed++;
         continue;
       }
       fs.writeFileSync(epub, buf);
       downloaded++;
+      if (downloaded % 10 === 0) { writeIndex(); console.log(`  … ${downloaded} libros copiados`); }
       await sleep(1500);
     }
     if (!fs.existsSync(cover)) {
@@ -82,11 +97,9 @@ async function main() {
       if (res) fs.writeFileSync(cover, Buffer.from(await res.arrayBuffer()));
       await sleep(500);
     }
-    have.push({ id, cover: fs.existsSync(cover) });
   }
-  const index = { updated: new Date().toISOString(), books: have.map((b) => b.id), covers: have.filter((b) => b.cover).map((b) => b.id) };
-  fs.writeFileSync(path.join(OUT, 'index.json'), JSON.stringify(index));
-  console.log(`Listo: ${have.length} libros disponibles (${downloaded} descargados ahora).`);
+  const total = writeIndex();
+  console.log(`Listo: ${total} libros disponibles (${downloaded} descargados ahora, ${failed} con error).`);
 }
 
 main().catch((e) => {
