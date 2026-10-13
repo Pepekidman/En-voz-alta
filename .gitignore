@@ -1,0 +1,5 @@
+node_modules/
+_site/
+tests/output/
+tests/fixtures/prueba.pdf
+.DS_Store

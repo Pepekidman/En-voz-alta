@@ -1,0 +1,60 @@
+name: Pruebas y publicación
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Pruebas unitarias
+        run: node --test tests/text.test.mjs
+      - name: Instalar Playwright
+        run: |
+          npm install --no-save playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Prueba de extremo a extremo
+        run: node tests/e2e.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: capturas
+          path: tests/output/
+
+  deploy:
+    needs: test
+    # Sólo se publica desde la rama principal del repositorio
+    if: github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preparar sitio
+        run: |
+          mkdir -p _site
+          cp -r index.html manifest.webmanifest sw.js css js vendor icons _site/
+          # Nueva versión de caché en cada publicación
+          sed -i "s/__BUILD__/${GITHUB_SHA::8}/" _site/sw.js
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
