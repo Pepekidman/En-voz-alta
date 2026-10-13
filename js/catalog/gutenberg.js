@@ -6,6 +6,17 @@ const API = 'https://gutendex.com/books/';
 
 // Categorías: el filtro "topic" de Gutendex busca en temas y estanterías de Gutenberg.
 const CATEGORIES = [
+  // Crecimiento personal
+  ['negocios', 'Negocios y dinero', 'business'],
+  ['exito', 'Éxito y motivación', 'success'],
+  ['desarrollo', 'Desarrollo personal', 'conduct of life'],
+  ['estoicismo', 'Estoicismo', 'stoic'],
+  ['meditacion', 'Meditación y espiritualidad', 'meditat'],
+  ['aprender', 'Aprender y estudiar', 'self-culture'],
+  ['oratoria', 'Oratoria y comunicación', 'public speaking'],
+  ['liderazgo', 'Liderazgo', 'leadership'],
+  ['salud', 'Salud y bienestar', 'health'],
+  // Literatura y conocimiento
   ['novela', 'Novela', 'fiction'],
   ['cuentos', 'Cuentos', 'short stories'],
   ['poesia', 'Poesía', 'poetry'],
@@ -30,7 +41,14 @@ const CATEGORIES = [
   ['arte', 'Arte y música', 'art']
 ].map(([id, label, topic]) => ({ id, label, topic }));
 
+// Colecciones recomendadas (números de libro verificados en Project Gutenberg)
+const COLLECTIONS = [];
+CATEGORIES.unshift(...COLLECTIONS);
+
 const SUBJECT_ES = [
+  [/success|business|wealth|money|thrift/i, 'Negocios y éxito'], [/conduct of life|self-culture|self-actualization|character/i, 'Desarrollo personal'],
+  [/stoic/i, 'Estoicismo'], [/meditat|spiritual life|new thought|mysticism/i, 'Espiritualidad'], [/public speaking|oratory/i, 'Oratoria'],
+  [/leadership/i, 'Liderazgo'], [/health|hygiene/i, 'Salud'],
   [/fiction/i, 'Novela'], [/short stories/i, 'Cuentos'], [/poetry/i, 'Poesía'], [/drama/i, 'Teatro'],
   [/adventure/i, 'Aventuras'], [/detective|mystery/i, 'Misterio'], [/science fiction/i, 'Ciencia ficción'],
   [/fantasy/i, 'Fantasía'], [/horror|ghost/i, 'Terror'], [/love stories|romance/i, 'Romance'],
@@ -97,6 +115,8 @@ export const gutenberg = {
   name: 'Project Gutenberg',
   note: 'Más de 75.000 libros clásicos de dominio público, gratis y legales. Se descargan en EPUB, el mejor formato para escuchar.',
   categories: CATEGORIES,
+  emptyHelp: `<b>¿Buscas un autor actual?</b> Project Gutenberg sólo tiene libros de <b>dominio público</b>: obras antiguas, en general de autores fallecidos hace más de 70 años. Autores como Brian Tracy, Isaac Asimov o Robert Kiyosaki tienen derechos de autor vigentes y no se pueden descargar gratis de forma legal.
+    <br><br>Si compraste el libro en PDF o EPUB <i>sin DRM</i>, agrégalo con <button class="linklike" data-action="add-file">Agregar archivo</button>. También puedes probar con clásicos del mismo tema en las categorías de arriba (Negocios, Éxito, Estoicismo…).`,
   sorts: [
     { id: 'popular', label: 'Más populares' },
     { id: 'descending', label: 'Agregados recientemente' },
@@ -104,16 +124,22 @@ export const gutenberg = {
   ],
   async search({ q, lang, cat, sort, page = 1, signal }) {
     const p = new URLSearchParams();
-    if (q) p.set('search', q);
-    if (lang) p.set('languages', lang);
     const c = CATEGORIES.find((x) => x.id === cat);
-    if (c) p.set('topic', c.topic);
+    if (c && c.ids) {
+      // Colección elegida a mano: se muestran todos sus libros, en cualquier idioma
+      p.set('ids', c.ids.join(','));
+    } else {
+      if (q) p.set('search', q);
+      if (lang) p.set('languages', lang);
+      if (c) p.set('topic', c.topic);
+      p.set('mime_type', 'application/epub');
+    }
     if (sort) p.set('sort', sort);
     if (page > 1) p.set('page', String(page));
-    p.set('mime_type', 'application/epub');
     const data = await fetchJson(`${API}?${p}`, { signal });
-    const items = (data.results || []).map(toBook).filter(Boolean);
-    return { items, total: data.count || 0, next: data.next ? page + 1 : null };
+    let items = (data.results || []).map(toBook).filter(Boolean);
+    if (c && c.ids) items = items.sort((a, b) => (b.lang === 'es') - (a.lang === 'es'));
+    return { items, total: data.count || 0, next: data.next ? page + 1 : null, collection: !!(c && c.ids) };
   },
   viaProxy(url, proxy) {
     return `${proxy.replace(/\/+$/, '')}/?url=${encodeURIComponent(url)}`;

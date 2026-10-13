@@ -458,3 +458,7 @@ input[type='range'] { width: 100%; accent-color: var(--accent); height: 28px; ma
 .card .ex-actions .icon-only { padding: 7px 9px; }
 #explore .lib-tools input { flex: 1 1 60%; }
 #explore .lib-tools select { flex: 0 1 40%; min-width: 0; }
+.ex-empty { text-align: left; color: var(--text); }
+.ex-empty-title { font-weight: 650; margin: 0 0 4px; }
+.ex-empty .btn-row { justify-content: flex-start; }
+.ex-empty .btn-row .btn { flex: none; }

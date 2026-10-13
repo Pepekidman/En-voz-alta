@@ -88,11 +88,44 @@ function renderFilters() {
   for (const s of src.sorts) sort.appendChild(new Option(s.label, s.id));
   if (!src.sorts.some((s) => s.id === state.sort)) state.sort = src.sorts[0].id;
   sort.value = state.sort;
-  $('#ex-note').textContent = src.note || '';
+  const col = src.categories.find((c) => c.id === state.cat && c.ids);
+  $('#ex-note').textContent = col
+    ? `${col.label.replace(/^★\s*/, '')}: ${col.desc || 'selección de clásicos'}. Incluye libros en todos los idiomas (primero los que están en español).`
+    : src.note || '';
 }
 
 function setStatus(text) {
   $('#ex-status').textContent = text || '';
+}
+
+/** Sin resultados: explica por qué (derechos de autor) y ofrece alternativas. */
+function showEmpty(src) {
+  const box = $('#ex-status');
+  box.innerHTML = '';
+  const wrap = el('<div class="ex-empty"></div>');
+  const title = el('<p class="ex-empty-title"></p>');
+  title.textContent = state.q ? `No se encontró «${state.q}»${state.lang ? ' en este idioma' : ''}.` : 'No hay libros con esos filtros.';
+  wrap.appendChild(title);
+  const actions = el('<div class="btn-row"></div>');
+  if (state.lang) {
+    const all = el('<button class="btn secondary small">Buscar en todos los idiomas</button>');
+    all.addEventListener('click', () => { state.lang = ''; saveState(); renderFilters(); search(); });
+    actions.appendChild(all);
+  }
+  if (state.cat || state.q) {
+    const clear = el('<button class="btn secondary small">Quitar filtros</button>');
+    clear.addEventListener('click', () => { state.cat = ''; state.q = ''; $('#ex-search').value = ''; saveState(); renderFilters(); search(); });
+    actions.appendChild(clear);
+  }
+  wrap.appendChild(actions);
+  if (state.q && src.emptyHelp) {
+    const help = el('<div class="note"></div>');
+    help.innerHTML = src.emptyHelp;
+    wrap.appendChild(help);
+    const add = help.querySelector('[data-action="add-file"]');
+    if (add) add.addEventListener('click', () => document.getElementById('file-input').click());
+  }
+  box.appendChild(wrap);
 }
 
 async function search({ append = false } = {}) {
@@ -121,7 +154,7 @@ async function search({ append = false } = {}) {
     state.next = res.next;
     const list = $('#ex-list');
     for (const b of res.items) list.appendChild(bookCard(b, src));
-    if (!state.items.length) setStatus('No se encontraron libros con esos filtros.');
+    if (!state.items.length) showEmpty(src);
     else setStatus(res.total ? `${res.total.toLocaleString('es')} libros encontrados` : '');
     $('#ex-more').classList.toggle('hidden', !res.next);
   } catch (e) {

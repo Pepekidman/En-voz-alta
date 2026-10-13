@@ -334,6 +334,9 @@ await context.route('https://gutendex.com/books/**', (route) => {
     bookshelves: ['Category: Novels'], languages: [lang], download_count: 5000 - id,
     formats: { 'application/epub+zip': `https://www.gutenberg.org/ebooks/${id}.epub3.images`, 'image/jpeg': `https://www.gutenberg.org/cache/epub/${id}/pg${id}.cover.medium.jpg`, ...extra }
   });
+  if ((u.searchParams.get('search') || '').includes('tracy')) {
+    return route.fulfill({ status: 200, headers: { ...CORS, 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 0, next: null, results: [] }) });
+  }
   const results = page === 1
     ? [mk(2000, 'Don Quijote', 'Cervantes Saavedra, Miguel de', 'es'), mk(9999, 'Libro sin CORS', 'Autor, Prueba', 'es')]
     : [mk(3000, 'Novelas ejemplares', 'Cervantes Saavedra, Miguel de', 'es')];
@@ -358,6 +361,22 @@ await page.fill('#ex-search', 'cervantes');
 await page.press('#ex-search', 'Enter');
 await page.waitForFunction(() => document.querySelectorAll('#ex-list .ex-card').length > 0);
 check(gutQueries[gutQueries.length - 1].search === 'cervantes', 'búsqueda por título o autor');
+await page.fill('#ex-search', 'brian tracy');
+await page.press('#ex-search', 'Enter');
+await page.waitForSelector('.ex-empty', { timeout: 5000 }).catch(() => {});
+check((await page.textContent('#ex-status')).includes('derechos de autor'), 'sin resultados: explica los derechos de autor');
+await page.click('.ex-empty .btn:has-text("todos los idiomas")');
+await page.waitForTimeout(300);
+check(!gutQueries[gutQueries.length - 1].languages, 'botón para buscar en todos los idiomas');
+await page.click('#ex-langs .chip:text-is("Español")');
+await page.fill('#ex-search', 'cervantes');
+await page.press('#ex-search', 'Enter');
+await page.waitForFunction(() => document.querySelectorAll('#ex-list .ex-card').length > 0);
+await page.click('#ex-cats .chip:text-is("Negocios y dinero")');
+await page.waitForTimeout(300);
+check(gutQueries[gutQueries.length - 1].topic === 'business', 'categoría «Negocios y dinero»');
+await page.click('#ex-cats .chip:text-is("Poesía")');
+await page.waitForFunction(() => document.querySelectorAll('#ex-list .ex-card').length > 0);
 await page.click('#ex-more');
 await page.waitForFunction(() => document.querySelectorAll('#ex-list .ex-card').length === 3);
 check(true, 'cargar más resultados (paginación)');
