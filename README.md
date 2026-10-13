@@ -58,7 +58,10 @@ El workflow `.github/workflows/pages.yml` ejecuta las pruebas y publica la app c
 
 Configuración (solo una vez):
 1. En GitHub: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
-2. Haz push o fusiona a la rama principal. La app queda en `https://<usuario>.github.io/En-voz-alta/`.
+   - En el plan gratuito de GitHub, Pages solo funciona con repositorios **públicos** (Settings → General → Danger Zone → Change visibility). Con GitHub Pro también funciona con repositorios privados, pero el sitio publicado es público.
+2. Vuelve a ejecutar el workflow (Actions → *Pruebas y publicación* → *Re-run*) o haz push a la rama principal. La app queda en `https://<usuario>.github.io/En-voz-alta/`.
+
+Alternativa sin GitHub Pages: cualquier hosting estático con HTTPS (Netlify, Cloudflare Pages, Vercel). Basta con subir los archivos del repositorio tal cual.
 
 Cada publicación cambia la versión de la caché del service worker. La app avisa con «Hay una versión nueva disponible» y no se recarga a mitad de una lectura.
 
