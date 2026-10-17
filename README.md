@@ -171,7 +171,7 @@ Las capturas quedan en `tests/output/`.
 
 - **Resaltado por palabra en Android:** Chrome no informa en qué palabra va la voz. Se resalta la frase completa, o la palabra de forma aproximada en el modo «Estimado». En iPhone y en el escritorio el resaltado por palabra es exacto.
 - **Pantalla apagada con voces del sistema:** la app reproduce un audio silencioso para que el sistema la trate como un reproductor, pero que la voz continúe depende del navegador. Las voces neuronales ✦ no tienen este problema.
-- **Voces neuronales en teléfonos lentos:** si el teléfono genera el audio más lento que el tiempo real, puede haber pausas entre frases. La voz *Carlfm (Rápida)* es la más liviana.
+- **Voces neuronales en teléfonos lentos:** si el teléfono genera el audio más lento de lo que se escucha, puede haber pausas entre frases. Con la pantalla apagada Android suele dejarle menos CPU a la app; para compensarlo la app prepara ~75 s de audio por adelantado, sintetiza directamente a la velocidad elegida (hasta 2×, con `length_scale` de Piper) y, si aun así se atrasa, prueba sola con menos hilos. Ajustes → Diagnóstico → «Copiar informe» muestra la carga y las esperas con la pantalla encendida y apagada. La voz *Carlfm (Rápida)* es la más liviana.
 - **PDF escaneados** (solo imágenes): no tienen texto y no se pueden leer (no hay OCR).
 - **Catálogo:** Gutendex (gutendex.com) es un servicio gratuito mantenido por una persona; si deja de responder, «Explorar» muestra un aviso. No se incluyó Internet Archive: no permite descargas desde apps web y sus PDF son escaneos con texto de calidad irregular para escuchar.
 - **Exportar a MP3** solo es posible con voces neuronales: la síntesis del sistema no permite grabar el audio.

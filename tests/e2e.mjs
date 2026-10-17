@@ -496,9 +496,9 @@ await page.click('.sheet .seg button:text-is("3×")');
 await page.click('#sheet-close');
 await page.click('#btn-play');
 await page.waitForFunction(() => window.__evz.player.idx >= 3, null, { timeout: 30000 }).catch(() => {});
-const nstate = await page.evaluate(() => ({ idx: window.__evz.player.idx, synth: window.__evz.neural.stats.synthMs, audio: window.__evz.neural.stats.audioMs, rate: window.__evz.neural.audio.playbackRate, paused: window.__evz.neural.audio.paused }));
+const nstate = await page.evaluate(() => ({ idx: window.__evz.player.idx, synth: window.__evz.neural.stats.synthMs, audio: window.__evz.neural.stats.listenMs, rate: window.__evz.neural.audio.playbackRate, speed: (window.__evz.neural.current && window.__evz.neural.current.speed) || ([...window.__evz.neural.cache.keys()].some((k) => k.startsWith('2|')) ? 2 : 0), paused: window.__evz.neural.audio.paused }));
 check(nstate.idx >= 3 && nstate.synth > 0 && nstate.audio > 0, `lee con la voz neural (frase ${nstate.idx}, ${Math.round(nstate.audio)} ms de audio)`);
-check(nstate.rate === 3 && !nstate.paused, 'velocidad aplicada al audio neural (3×)');
+check(nstate.speed === 2 && nstate.rate === 1.5 && !nstate.paused, `velocidad 3×: voz generada a 2× y el resto con el reproductor (${nstate.speed}× · ${nstate.rate})`);
 check(await page.$('#reader-content .s.current mark') !== null, 'resaltado de palabra con voz neural');
 await page.screenshot({ path: path.join(OUT, '09-leyendo-neural.png') });
 await page.evaluate(() => window.__evz.neural.audio.pause()); // como una llamada entrante
@@ -509,11 +509,59 @@ await page.waitForFunction(() => !window.__evz.neural.audio.paused, null, { time
 await page.click('#btn-play');
 await page.waitForTimeout(700);
 check(await page.evaluate(() => window.__evz.neural.audio.paused && !window.__evz.player.playing), 'pausa la voz neural');
+check(await page.evaluate(() => window.__evz.neural.jobs.every((j) => !j.prefetch)), 'al pausar se descarta lo que se preparaba por adelantado');
+// La velocidad se aplica en la síntesis (length_scale): la voz de prueba la refleja en el volumen
+const amp = await page.evaluate(async () => {
+  const n = window.__evz.neural;
+  const peak = (r) => r.pcm.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  const a1 = peak(await n.synth('Hola mundo.', true, 1));
+  const a2 = peak(await n.synth('Hola mundo.', true, 2));
+  return { a1, a2 };
+});
+check(Math.abs(amp.a2 / amp.a1 - 0.5) < 0.05, `la síntesis recibe la velocidad (${(amp.a2 / amp.a1).toFixed(2)})`);
+// Menos hilos: el motor se reinicia entre frases y la voz se recarga sola
+const thr = await page.evaluate(async () => {
+  const n = window.__evz.neural;
+  n.threads = 1;
+  n.restartPending = true;
+  await n.synth('Prueba de hilos.', true, 1);
+  const t = n.loadedThreads;
+  n.threads = 0;
+  n.restartPending = true;
+  await n.synth('Prueba de hilos otra vez.', true, 1);
+  return { t, back: n.loadedThreads };
+});
+check(thr.t === 1 && thr.back >= 1, `el motor se reinicia con menos hilos (${thr.t}, luego ${thr.back})`);
+// Con la pantalla apagada, si la voz no da abasto se prueba con la mitad de hilos
+const adapt = await page.evaluate(() => {
+  const n = window.__evz.neural;
+  const saved = { lt: n.loadedThreads, diag: n.diag };
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+  const reset = () => { n.threadTrial = null; n.hiddenLoad = null; n.hiddenJobs = 0; n.threads = 0; n.restartPending = false; n.loadedThreads = 4; n.diag = { visible: { ...saved.diag.visible }, hidden: { jobs: 0, synthMs: 0, listenMs: 0, waits: 0, waitMs: 0, maxWaitMs: 0 } }; };
+  reset();
+  n.noteWait(800); n.noteWait(1500);
+  for (let i = 0; i < 5; i++) n.noteJob(1200, 1000);
+  const tried = { state: n.threadTrial && n.threadTrial.state, threads: n.threads, restart: n.restartPending };
+  for (let i = 0; i < 6; i++) n.noteJob(600, 1000);
+  const better = n.threadTrial.state;
+  const diag = n.diagnostics();
+  reset();
+  n.noteWait(800); n.noteWait(900);
+  for (let i = 0; i < 5; i++) n.noteJob(1000, 1000);
+  for (let i = 0; i < 6; i++) n.noteJob(1500, 1000);
+  const worse = { state: n.threadTrial.state, threads: n.threads };
+  delete document.hidden;
+  n.threadTrial = null; n.hiddenLoad = null; n.hiddenJobs = 0; n.threads = 0; n.restartPending = false; n.loadedThreads = saved.lt; n.diag = saved.diag;
+  return { tried, better, worse, diag, hiddenNow: document.hidden };
+});
+check(adapt.tried.state === 'probando' && adapt.tried.threads === 2 && adapt.tried.restart, 'pantalla apagada y voz atrasada: prueba con la mitad de hilos');
+check(adapt.better === 'mejor' && adapt.worse.state === 'revertido' && adapt.worse.threads === 0, 'mantiene los hilos si mejora y vuelve atrás si empeora');
+check(/esperas 2 \(máx 1\.5 s\)/.test(adapt.diag.pantallaApagada) && /prueba 4→2/.test(adapt.diag.hilos) && adapt.hiddenNow === false, `diagnóstico de pausas con pantalla apagada (${adapt.diag.pantallaApagada}; hilos ${adapt.diag.hilos})`);
 // Si el motor se cierra (p. ej. por memoria), se recupera solo
-await page.evaluate(() => { window.__evz.neural.resetWorker(new Error('prueba')); window.__evz.neural.cache.clear(); window.__evz.neural.stats.audioMs = 0; });
+await page.evaluate(() => { window.__evz.neural.resetWorker(new Error('prueba')); window.__evz.neural.cache.clear(); window.__evz.neural.stats.listenMs = 0; });
 await page.click('#btn-play');
-await page.waitForFunction(() => window.__evz.neural.stats.audioMs > 0, null, { timeout: 20000 }).catch(() => {});
-check(await page.evaluate(() => window.__evz.neural.stats.audioMs > 0 && window.__evz.player.playing), 'se recupera si el motor de voz se cierra');
+await page.waitForFunction(() => window.__evz.neural.stats.listenMs > 0, null, { timeout: 20000 }).catch(() => {});
+check(await page.evaluate(() => window.__evz.neural.stats.listenMs > 0 && window.__evz.player.playing), 'se recupera si el motor de voz se cierra');
 await page.click('#btn-play');
 // espeak pierde memoria en cada frase: sin reciclarlo se rompía tras ~90 frases ("Aborted()")
 const longRun = await page.evaluate(async () => {
@@ -571,10 +619,10 @@ await page.click('#btn-back');
 await openCard('.card[data-format="epub"]');
 await page.waitForFunction(() => window.__evz.player.engine === window.__evz.neural, null, { timeout: 10000 }).catch(() => {});
 check(await page.evaluate(() => window.__evz.player.engine === window.__evz.neural), 'voz neural disponible sin conexión');
-await page.evaluate(() => { window.__evz.neural.stats.audioMs = 0; });
+await page.evaluate(() => { window.__evz.neural.stats.listenMs = 0; });
 await page.click('#btn-play');
-await page.waitForFunction(() => window.__evz.neural.stats.audioMs > 0, null, { timeout: 20000 }).catch(() => {});
-check(await page.evaluate(() => window.__evz.neural.stats.audioMs > 0), 'la voz neural sintetiza sin conexión');
+await page.waitForFunction(() => window.__evz.neural.stats.listenMs > 0, null, { timeout: 20000 }).catch(() => {});
+check(await page.evaluate(() => window.__evz.neural.stats.listenMs > 0), 'la voz neural sintetiza sin conexión');
 check(await page.evaluate(() => crossOriginIsolated), 'aislamiento entre orígenes activo (motor multihilo)');
 await page.click('#btn-play');
 await context.setOffline(false);

@@ -15,7 +15,7 @@ import { initExplore } from './explore.js';
 import { makeThumbnail } from './parsers/common.js';
 import { logError, getLog, clearLog, report, installGlobalHandlers } from './log.js';
 
-const VERSION = '1.3.1';
+const VERSION = '1.3.2';
 
 const DEFAULTS = {
   rate: 1,
@@ -224,6 +224,12 @@ function deliverFile(name, data, type, { title = 'Archivo listo', hint = '' } = 
 }
 
 /** Error comprensible con opción de copiar el detalle técnico. */
+function reportExtra() {
+  const extra = { version: VERSION, motor: player.engine === neural ? 'neural' : 'sistema', voces: engine.voices.length, velocidad: settings.rate };
+  if (neural.voice) Object.assign(extra, neural.diagnostics());
+  return extra;
+}
+
 function showError(title, err, context = 'error') {
   const entry = logError(context, err);
   const body = el(`<div>
@@ -237,7 +243,7 @@ function showError(title, err, context = 'error') {
   $('#er-ok').onclick = () => closeSheet();
   $('#er-copy').onclick = async () => {
     try {
-      await navigator.clipboard.writeText(report({ version: VERSION }));
+      await navigator.clipboard.writeText(report(reportExtra()));
       toast('Detalle copiado. Puedes pegarlo en un mensaje.');
     } catch {
       toast('No se pudo copiar. Abre Ajustes → Diagnóstico.');
@@ -1271,9 +1277,15 @@ async function openVoiceSheet({ keepScroll = false, showAll = false } = {}) {
     if (neuralActive() && rtf) {
       const perf = el('<p class="small" style="margin:4px 0"></p>');
       perf.textContent = rtf < 0.85
-        ? `Tu teléfono genera la voz ${(1 / rtf).toFixed(1)}× más rápido que el tiempo real. ✓`
-        : `Tu teléfono genera la voz más lento que el tiempo real (puede haber cortes). Prueba una voz «Rápida».`;
+        ? `Tu teléfono genera la voz ${(1 / rtf).toFixed(1)}× más rápido de lo que la escuchas. ✓`
+        : `Tu teléfono genera la voz más lento de lo que la escuchas (puede haber pausas). Prueba una voz «Media» o «Rápida», o baja la velocidad.`;
       perf.classList.toggle('muted', rtf < 0.85);
+      body.appendChild(perf);
+    }
+    const hiddenRtf = neural.hiddenRealTimeFactor;
+    if (neuralActive() && hiddenRtf && hiddenRtf >= 0.9 && !(rtf >= 0.85)) {
+      const perf = el('<p class="small" style="margin:4px 0"></p>');
+      perf.textContent = 'Con la pantalla apagada tu teléfono genera esta voz más lento y puede haber pausas entre frases. Si pasa seguido, prueba una voz «Media» o «Rápida», o baja la velocidad.';
       body.appendChild(perf);
     }
     if (neuralActive()) body.appendChild(exportSection());
@@ -1987,8 +1999,7 @@ async function openSettings() {
   });
   $('#st-export').onclick = exportBackup;
   $('#st-report').onclick = async () => {
-    const extra = { version: VERSION, motor: player.engine === neural ? `neural ${neural.voice?.key || ''}` : 'sistema', voces: engine.voices.length };
-    const text = report(extra);
+    const text = report(reportExtra());
     try {
       await navigator.clipboard.writeText(text);
       toast('Informe copiado. Pégalo en un mensaje para enviarlo.');

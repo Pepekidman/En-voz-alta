@@ -6,7 +6,10 @@ const VENDOR = new URL('../../vendor/', self.location.href).href;
 importScripts(VENDOR + 'ort/ort.wasm.min.js', VENDOR + 'piper/piper_phonemize.js');
 
 ort.env.wasm.wasmPaths = VENDOR + 'ort/';
-ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1)) : 1;
+// Hilos: automático o los que pida la app (?hilos=N), nunca más que los automáticos
+const autoThreads = self.crossOriginIsolated ? Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1)) : 1;
+const askedThreads = Number(new URL(self.location.href).searchParams.get('hilos')) || 0;
+ort.env.wasm.numThreads = askedThreads ? Math.max(1, Math.min(autoThreads, askedThreads)) : autoThreads;
 ort.env.logLevel = 'error';
 
 let phonemizer = null;
@@ -116,7 +119,7 @@ async function loadVoice({ key, modelUrl, configUrl, cacheName }) {
   voiceKey = key;
 }
 
-async function synthesize(text, { speaker = 0, lengthScale } = {}) {
+async function synthesize(text, { speaker = 0, lengthScale, speed = 1 } = {}) {
   const ids = await phonemize(text);
   if (!ids.length) return new Float32Array(0);
   const inf = config.inference || {};
@@ -125,7 +128,7 @@ async function synthesize(text, { speaker = 0, lengthScale } = {}) {
     input_lengths: new ort.Tensor('int64', BigInt64Array.from([BigInt(ids.length)]), [1]),
     scales: new ort.Tensor('float32', Float32Array.from([
       inf.noise_scale ?? 0.667,
-      lengthScale ?? inf.length_scale ?? 1,
+      (lengthScale ?? inf.length_scale ?? 1) / (speed > 0 ? speed : 1),
       inf.noise_w ?? 0.8
     ]), [3])
   };

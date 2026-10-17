@@ -271,7 +271,11 @@ export class Player extends EventTarget {
           queuedNext = true;
           this.startUnit(next.i, next.c, gen);
         }
-        if (engine.prefetch) engine.prefetch(this.upcomingTexts(i, chunkIdx, 4));
+        if (engine.prefetch) {
+          // Preparar ~N segundos de escucha por adelantado (si el motor lo pide)
+          const chars = engine.prefetchSeconds ? engine.prefetchSeconds * this.cps * (st.rate || 1) : Infinity;
+          engine.prefetch(this.upcomingTexts(i, chunkIdx, engine.prefetchMax || 4, chars));
+        }
       },
       onboundary: (charIndex) => {
         if (st.wordHighlight === 'off') return;
@@ -317,14 +321,15 @@ export class Player extends EventTarget {
   }
 
   /** Textos de los próximos fragmentos (para sintetizar por adelantado). */
-  upcomingTexts(i, c, n) {
+  upcomingTexts(i, c, n, maxChars = Infinity) {
     const out = [];
     let u = { i, c };
-    for (let k = 0; k < n; k++) {
+    let chars = 0;
+    for (let k = 0; k < n && chars < maxChars; k++) {
       u = this.nextUnit(u.i, u.c);
       if (!u) break;
       const ch = this.chunks(u.i).chunks[u.c];
-      if (ch) out.push(ch.text);
+      if (ch) { out.push(ch.text); chars += ch.text.length; }
     }
     return out;
   }
